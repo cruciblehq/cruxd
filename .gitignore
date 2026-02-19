@@ -1,0 +1,16 @@
+# Build output
+dist/
+cruxd
+
+# Test and coverage
+*.test
+coverage.out
+coverage.html
+
+# Workspace
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
