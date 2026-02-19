@@ -1,0 +1,190 @@
+package server
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/cruciblehq/cruxd/internal/paths"
+	"github.com/cruciblehq/cruxd/internal/runtime"
+	"github.com/cruciblehq/go-utils/crex"
+	"github.com/cruciblehq/spec/protocol"
+)
+
+// Holds server configuration.
+type Config struct {
+	SocketPath          string // Override for the Unix socket path. Empty uses the default.
+	ContainerdAddress   string // Containerd socket address.
+	ContainerdNamespace string // Containerd namespace for images and containers.
+}
+
+// Listens on a Unix domain socket and dispatches commands.
+type Server struct {
+	socketPath string           // Path to the Unix socket file.
+	runtime    *runtime.Runtime // Containerd-backed container runtime.
+	listener   net.Listener     // Listener for incoming connections.
+	startedAt  time.Time        // Timestamp when the server started.
+	builds     int              // Total number of build commands processed.
+	done       chan struct{}    // Channel to signal server shutdown.
+	mu         sync.Mutex       // Mutex to protect shared state.
+}
+
+// Creates a new server instance.
+//
+// The socket is not opened until [Start] is called.
+func New(cfg Config) (*Server, error) {
+	socketPath := cfg.SocketPath
+	if socketPath == "" {
+		socketPath = paths.Socket()
+	}
+
+	rt, err := runtime.New(cfg.ContainerdAddress, cfg.ContainerdNamespace)
+	if err != nil {
+		return nil, crex.Wrap(ErrServer, err)
+	}
+
+	return &Server{
+		socketPath: socketPath,
+		runtime:    rt,
+		done:       make(chan struct{}),
+	}, nil
+}
+
+// Opens the Unix socket and begins accepting connections.
+func (s *Server) Start() error {
+	socketPath := s.socketPath
+
+	if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil {
+		return crex.Wrap(ErrServer, err)
+	}
+
+	// Remove stale socket from a previous run.
+	os.Remove(socketPath)
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return crex.Wrapf(ErrServer, "failed to listen on %s", socketPath)
+	}
+
+	s.listener = listener
+	s.startedAt = time.Now()
+
+	if err := writePID(); err != nil {
+		slog.Warn("failed to write PID file", "error", err)
+	}
+
+	slog.Info("server listening on socket", "path", socketPath)
+
+	go s.accept()
+	return nil
+}
+
+// Shuts down the server and cleans up resources.
+func (s *Server) Stop() error {
+	close(s.done)
+
+	if s.listener != nil {
+		s.listener.Close()
+	}
+
+	if s.runtime != nil {
+		s.runtime.Close()
+	}
+
+	os.Remove(s.socketPath)
+	os.Remove(paths.PIDFile())
+
+	return nil
+}
+
+// Blocks until the server stops.
+func (s *Server) Wait() {
+	<-s.done
+}
+
+// Accepts connections in a loop until the server shuts down.
+func (s *Server) accept() {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			select {
+			case <-s.done:
+				return
+			default:
+				slog.Error("accept error", "error", err)
+				continue
+			}
+		}
+
+		go s.handle(conn)
+	}
+}
+
+// Processes a single connection.
+//
+// Reads one newline-delimited JSON message, dispatches the command, and
+// writes the response. The connection is closed after one exchange.
+func (s *Server) handle(conn net.Conn) {
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	line, err := reader.ReadBytes(byte(10))
+	if err != nil {
+		slog.Error("read error", "error", err)
+		return
+	}
+
+	env, payload, err := protocol.Decode(line)
+	if err != nil {
+		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{Message: err.Error()})
+		return
+	}
+
+	slog.Info("command received", "command", env.Command)
+
+	s.dispatch(conn, env.Command, payload)
+}
+
+// Routes a command to the appropriate handler.
+func (s *Server) dispatch(conn net.Conn, cmd protocol.Command, payload json.RawMessage) {
+	ctx := context.Background()
+
+	switch cmd {
+	case protocol.CmdBuild:
+		s.handleBuild(ctx, conn, payload)
+	case protocol.CmdStatus:
+		s.handleStatus(conn)
+	case protocol.CmdShutdown:
+		s.handleShutdown(conn)
+	default:
+		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{
+			Message: fmt.Sprintf("unknown command: %s", cmd),
+		})
+	}
+}
+
+// Writes a JSON envelope response to the connection.
+func (s *Server) respond(conn net.Conn, cmd protocol.Command, payload any) {
+	data, err := protocol.Encode(cmd, payload)
+	if err != nil {
+		slog.Error("encode response failed", "error", err)
+		return
+	}
+	data = append(data, byte(10))
+	conn.Write(data)
+}
+
+// Writes the daemon PID to the PID file.
+func writePID() error {
+	if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil {
+		return err
+	}
+	return os.WriteFile(paths.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), paths.DefaultFileMode)
+}
