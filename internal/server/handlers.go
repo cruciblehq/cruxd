@@ -24,12 +24,12 @@ func (s *Server) handleBuild(ctx context.Context, conn net.Conn, payload json.Ra
 	}
 
 	result, err := build.Run(ctx, s.runtime, build.Options{
-		Recipe:       req.Recipe,
-		Resource:     req.Resource,
-		Output:       req.Output,
-		Root:         req.Root,
-		Entrypoint:   req.Entrypoint,
-		Platforms:    req.Platforms,
+		Recipe:     req.Recipe,
+		Resource:   req.Resource,
+		Output:     req.Output,
+		Root:       req.Root,
+		Entrypoint: req.Entrypoint,
+		Platforms:  req.Platforms,
 	})
 	if err != nil {
 		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{Message: err.Error()})

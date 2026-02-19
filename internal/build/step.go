@@ -2,9 +2,9 @@ package build
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
+	"github.com/cruciblehq/crex"
 	"github.com/cruciblehq/cruxd/internal/runtime"
 	"github.com/cruciblehq/spec/manifest"
 )
@@ -13,7 +13,7 @@ import (
 func executeSteps(ctx context.Context, ctr *runtime.Container, steps []manifest.Step, state *stepState, buildCtx string, stages map[string]*runtime.Container) error {
 	for i, step := range steps {
 		if err := executeStep(ctx, ctr, step, state, buildCtx, stages); err != nil {
-			return fmt.Errorf("step %d: %w", i+1, err)
+			return crex.Wrapf(ErrBuild, "step %d: %w", i+1, err)
 		}
 	}
 	return nil
@@ -61,7 +61,7 @@ func executeOperation(ctx context.Context, ctr *runtime.Container, step manifest
 			return err
 		}
 		if result.ExitCode != 0 {
-			return fmt.Errorf("command failed with exit code %d (%s)", result.ExitCode, result.Stderr)
+			return crex.Wrapf(ErrCommandFailed, "exit code %d: %s", result.ExitCode, result.Stderr)
 		}
 
 	case step.Copy != "":

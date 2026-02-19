@@ -3,7 +3,6 @@ package build
 import (
 	"archive/tar"
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -134,7 +133,7 @@ func parseStageCopy(src string) (stage, path string, ok bool) {
 func parseCopy(s, workdir string) (src, dest string, err error) {
 	parts := strings.Fields(s)
 	if len(parts) != 2 {
-		return "", "", fmt.Errorf("expected source and destination, got %q", s)
+		return "", "", crex.Wrapf(ErrCopy, "missing source or destination in %q", s)
 	}
 
 	src = parts[0]
@@ -142,7 +141,7 @@ func parseCopy(s, workdir string) (src, dest string, err error) {
 
 	if !filepath.IsAbs(dest) {
 		if workdir == "" {
-			return "", "", fmt.Errorf("relative dest %q requires workdir", dest)
+			return "", "", crex.Wrapf(ErrCopy, "relative dest %q requires workdir", dest)
 		}
 		dest = filepath.Join(workdir, dest)
 	}
