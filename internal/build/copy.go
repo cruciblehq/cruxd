@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cruciblehq/crex"
 	"github.com/cruciblehq/cruxd/internal/runtime"
-	"github.com/cruciblehq/go-utils/crex"
 )
 
 // Executes a copy operation, transferring files into the container.

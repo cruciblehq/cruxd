@@ -5,7 +5,7 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/cruciblehq/go-utils/crex"
+	"github.com/cruciblehq/crex"
 )
 
 // Creates a directory inside the container, including parents.

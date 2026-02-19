@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/containerd/containerd/v2/pkg/cio"
-	"github.com/cruciblehq/go-utils/crex"
+	"github.com/cruciblehq/crex"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 

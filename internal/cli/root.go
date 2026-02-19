@@ -5,8 +5,8 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
+	"github.com/cruciblehq/crex"
 	"github.com/cruciblehq/cruxd/internal"
-	"github.com/cruciblehq/go-utils/crex"
 )
 
 // Represents the root command for the cruxd daemon.

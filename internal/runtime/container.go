@@ -9,7 +9,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
-	"github.com/cruciblehq/go-utils/crex"
+	"github.com/cruciblehq/crex"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 

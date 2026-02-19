@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cruciblehq/crex"
 	"github.com/cruciblehq/cruxd/internal/paths"
 	"github.com/cruciblehq/cruxd/internal/runtime"
-	"github.com/cruciblehq/go-utils/crex"
 	"github.com/cruciblehq/spec/protocol"
 )
 

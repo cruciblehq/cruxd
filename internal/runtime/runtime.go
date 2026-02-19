@@ -12,7 +12,7 @@ import (
 	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
-	"github.com/cruciblehq/go-utils/crex"
+	"github.com/cruciblehq/crex"
 )
 
 const (
