@@ -1,0 +1,91 @@
+name: Build
+
+on:
+    push:
+        branches: [dev, preview, staging, main]
+    workflow_dispatch:
+
+jobs:
+    # --- Set Version ---
+    set-version:
+        runs-on: ubuntu-latest
+        outputs:
+            version: ${{ steps.setver.outputs.version }}
+            stage: ${{ steps.setver.outputs.stage }}
+            commit: ${{ steps.setver.outputs.commit }}
+        steps:
+            - uses: actions/checkout@v4
+            - name: Set Version
+              id: setver
+              uses: cruciblehq/.github/actions/set-version@main
+
+    # --- Validate ---
+    validate-source:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: "1.25.x"
+            - name: Verify Go modules
+              uses: cruciblehq/.github/actions/verify-go-modules@main
+            - name: Run Go tests and coverage
+              uses: cruciblehq/.github/actions/go-test-coverage@main
+              with:
+                  coverage-threshold: "5"
+
+    # --- Publish Coverage ---
+    publish-coverage:
+        needs: validate-source
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/download-artifact@v4
+              with:
+                  name: coverage-badge
+                  path: badges
+            - uses: actions/download-artifact@v4
+              with:
+                  name: coverage-report
+                  path: coverage
+            - name: Prepare gh-pages
+              run: |
+                  mkdir public
+                  cp -r coverage badges public/
+            - name: Publish to GitHub Pages
+              uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e
+              with:
+                  github_token: ${{ secrets.GITHUB_TOKEN }}
+                  publish_dir: ./public
+
+    # --- Build ---
+    build:
+        needs: [set-version, validate-source]
+        strategy:
+            fail-fast: true
+            matrix:
+                goarch: [amd64, arm64]
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: "1.25.x"
+            - uses: cruciblehq/.github/actions/verify-go-modules@main
+
+            - name: Build linux/${{ matrix.goarch }}
+              run: |
+                  mkdir -p dist
+                  GOOS=linux GOARCH=${{ matrix.goarch }} \
+                  go build -v -ldflags "\
+                    -X github.com/cruciblehq/cruxd/internal.version=${{ needs.set-version.outputs.version }} \
+                    -X github.com/cruciblehq/cruxd/internal.stage=${{ needs.set-version.outputs.stage }} \
+                    -X github.com/cruciblehq/cruxd/internal.gitCommit=${{ needs.set-version.outputs.commit }}" \
+                  -o dist/cruxd-linux-${{ matrix.goarch }} ./cmd/cruxd
+
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: cruxd-linux-${{ matrix.goarch }}
+                  path: dist/
