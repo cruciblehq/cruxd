@@ -10,6 +10,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	"github.com/cruciblehq/crex"
+	"github.com/cruciblehq/spec/protocol"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -18,6 +19,41 @@ type Container struct {
 	client   *containerd.Client // Containerd client for managing the container.
 	id       string             // Unique identifier for the container, used as the containerd container ID.
 	platform string             // OCI platform (e.g., "linux/amd64").
+}
+
+// Queries the current state of the container.
+//
+// Returns [protocol.ContainerRunning] if the task is active,
+// [protocol.ContainerStopped] if the container exists but has no running
+// task, or [protocol.ContainerNotCreated] if the container does not exist.
+func (c *Container) Status(ctx context.Context) (protocol.ContainerState, error) {
+	ctr, err := c.client.LoadContainer(ctx, c.id)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return protocol.ContainerNotCreated, nil
+		}
+		return "", crex.Wrap(ErrRuntime, err)
+	}
+
+	task, err := ctr.Task(ctx, nil)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return protocol.ContainerStopped, nil
+		}
+		return "", crex.Wrap(ErrRuntime, err)
+	}
+
+	status, err := task.Status(ctx)
+	if err != nil {
+		return "", crex.Wrap(ErrRuntime, err)
+	}
+
+	switch status.Status {
+	case containerd.Running:
+		return protocol.ContainerRunning, nil
+	default:
+		return protocol.ContainerStopped, nil
+	}
 }
 
 // Stops the container's task.

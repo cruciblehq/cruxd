@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/cruciblehq/crex"
-	"github.com/cruciblehq/cruxd/internal/paths"
 	"github.com/cruciblehq/cruxd/internal/runtime"
+	"github.com/cruciblehq/spec/paths"
 	"github.com/cruciblehq/spec/protocol"
 )
 
@@ -159,6 +159,22 @@ func (s *Server) dispatch(conn net.Conn, cmd protocol.Command, payload json.RawM
 	switch cmd {
 	case protocol.CmdBuild:
 		s.handleBuild(ctx, conn, payload)
+	case protocol.CmdImageImport:
+		s.handleImageImport(ctx, conn, payload)
+	case protocol.CmdImageStart:
+		s.handleImageStart(ctx, conn, payload)
+	case protocol.CmdImageDestroy:
+		s.handleImageDestroy(ctx, conn, payload)
+	case protocol.CmdContainerStop:
+		s.handleContainerStop(ctx, conn, payload)
+	case protocol.CmdContainerDestroy:
+		s.handleContainerDestroy(ctx, conn, payload)
+	case protocol.CmdContainerStatus:
+		s.handleContainerStatus(ctx, conn, payload)
+	case protocol.CmdContainerExec:
+		s.handleContainerExec(ctx, conn, payload)
+	case protocol.CmdContainerUpdate:
+		s.handleContainerUpdate(ctx, conn, payload)
 	case protocol.CmdStatus:
 		s.handleStatus(conn)
 	case protocol.CmdShutdown:

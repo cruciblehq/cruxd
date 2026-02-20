@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	goruntime "runtime"
+	"syscall"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/images"
@@ -196,4 +198,108 @@ func (rt *Runtime) resolveImage(ctx context.Context, tag, platform string) (cont
 func imageTag(path string) string {
 	h := sha256.Sum256([]byte(path))
 	return fmt.Sprintf("import/%s:latest", hex.EncodeToString(h[:]))
+}
+
+// Returns the default OCI platform for the host architecture.
+func defaultPlatform() string {
+	return "linux/" + goruntime.GOARCH
+}
+
+// Imports an OCI archive, tags it under the given name, and unpacks it for
+// the host platform.
+//
+// The archive is imported into the content store, tagged with the provided
+// name, and the layers are unpacked into the snapshotter.
+func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error {
+	source, err := rt.importArchive(ctx, path)
+	if err != nil {
+		return crex.Wrap(ErrRuntime, err)
+	}
+
+	if err := rt.tagImage(ctx, source, tag); err != nil {
+		return crex.Wrap(ErrRuntime, err)
+	}
+
+	platform := defaultPlatform()
+	if err := rt.unpackImage(ctx, tag, platform); err != nil {
+		return crex.Wrap(ErrRuntime, err)
+	}
+
+	slog.Debug("image imported", "tag", tag)
+	return nil
+}
+
+// Starts a container from a previously imported image tag.
+//
+// Any stale container with the same ID is cleaned up first. The container
+// runs detached with a long-running task.
+func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container, error) {
+	platform := defaultPlatform()
+
+	c := &Container{
+		client:   rt.client,
+		id:       id,
+		platform: platform,
+	}
+
+	c.remove(ctx)
+
+	image, err := rt.resolveImage(ctx, tag, platform)
+	if err != nil {
+		return nil, crex.Wrap(ErrRuntime, err)
+	}
+
+	ctr, err := c.create(ctx, image)
+	if err != nil {
+		return nil, crex.Wrap(ErrRuntime, err)
+	}
+
+	if err := c.startTask(ctx, ctr); err != nil {
+		ctr.Delete(ctx, containerd.WithSnapshotCleanup)
+		return nil, crex.Wrap(ErrRuntime, err)
+	}
+
+	slog.Debug("container started", "id", id, "image", tag)
+	return c, nil
+}
+
+// Removes an image and all containers created from it.
+//
+// Containers are discovered by querying containerd for records whose image
+// field matches the tag. Each container's task is killed before the container
+// and its snapshot are deleted.
+func (rt *Runtime) DestroyImage(ctx context.Context, tag string) error {
+	ctrs, err := rt.client.Containers(ctx, fmt.Sprintf("image==%s", tag))
+	if err != nil {
+		return crex.Wrap(ErrRuntime, err)
+	}
+
+	for _, ctr := range ctrs {
+		if task, taskErr := ctr.Task(ctx, nil); taskErr == nil {
+			task.Kill(ctx, syscall.SIGKILL)
+			task.Delete(ctx, containerd.WithProcessKill)
+		}
+		if err := ctr.Delete(ctx, containerd.WithSnapshotCleanup); err != nil && !errdefs.IsNotFound(err) {
+			return crex.Wrap(ErrRuntime, err)
+		}
+	}
+
+	if err := rt.client.ImageService().Delete(ctx, tag); err != nil && !errdefs.IsNotFound(err) {
+		return crex.Wrap(ErrRuntime, err)
+	}
+
+	slog.Debug("image destroyed", "tag", tag)
+	return nil
+}
+
+// Returns a handle for an existing container.
+//
+// The container is not loaded or verified; the handle is a lightweight
+// reference that resolves the container lazily on subsequent calls.
+func (rt *Runtime) Container(id string) *Container {
+	return &Container{
+		client:   rt.client,
+		id:       id,
+		platform: defaultPlatform(),
+	}
 }

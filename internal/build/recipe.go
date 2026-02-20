@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/cruciblehq/crex"
-	"github.com/cruciblehq/cruxd/internal/paths"
+	"github.com/cruciblehq/spec/paths"
 	"github.com/cruciblehq/cruxd/internal/runtime"
 	"github.com/cruciblehq/spec/manifest"
 )

@@ -47,6 +47,30 @@ func (c *Container) Exec(ctx context.Context, shell, command string, env []strin
 	}, nil
 }
 
+// Runs a command and arguments directly inside the container.
+//
+// Unlike [Exec], which passes a command string to a shell, ExecArgs runs the
+// command directly without shell wrapping. This is suitable for CLI-invoked
+// exec where the user provides the full command line.
+func (c *Container) ExecArgs(ctx context.Context, args []string) (*ExecResult, error) {
+	pspec, err := c.buildProcessSpec(ctx, nil, "", args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var stdout, stderr bytes.Buffer
+	exitCode, err := c.execProcess(ctx, pspec, nil, &stdout, &stderr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ExecResult{
+		ExitCode: exitCode,
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+	}, nil
+}
+
 // Builds an OCI process spec for running a command inside the container.
 //
 // A process spec defines everything needed to start a process: the command
