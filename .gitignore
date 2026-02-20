@@ -1,6 +1,6 @@
 # Build output
 dist/
-cruxd
+/cruxd
 
 # Test and coverage
 *.test
