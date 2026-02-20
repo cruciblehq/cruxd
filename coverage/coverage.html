@@ -1,0 +1,2311 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>build: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/cruciblehq/cruxd/internal/build/build.go (0.0%)</option>
+				
+				<option value="file1">github.com/cruciblehq/cruxd/internal/build/copy.go (16.3%)</option>
+				
+				<option value="file2">github.com/cruciblehq/cruxd/internal/build/recipe.go (0.0%)</option>
+				
+				<option value="file3">github.com/cruciblehq/cruxd/internal/build/step.go (0.0%)</option>
+				
+				<option value="file4">github.com/cruciblehq/cruxd/internal/build/stepstate.go (100.0%)</option>
+				
+				<option value="file5">github.com/cruciblehq/cruxd/internal/cli/root.go (0.0%)</option>
+				
+				<option value="file6">github.com/cruciblehq/cruxd/internal/config.go (0.0%)</option>
+				
+				<option value="file7">github.com/cruciblehq/cruxd/internal/runtime/container.go (0.0%)</option>
+				
+				<option value="file8">github.com/cruciblehq/cruxd/internal/runtime/copy.go (0.0%)</option>
+				
+				<option value="file9">github.com/cruciblehq/cruxd/internal/runtime/exec.go (16.4%)</option>
+				
+				<option value="file10">github.com/cruciblehq/cruxd/internal/runtime/export.go (6.1%)</option>
+				
+				<option value="file11">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (3.0%)</option>
+				
+				<option value="file12">github.com/cruciblehq/cruxd/internal/server/handlers.go (0.0%)</option>
+				
+				<option value="file13">github.com/cruciblehq/cruxd/internal/server/server.go (0.0%)</option>
+				
+				<option value="file14">github.com/cruciblehq/cruxd/internal/variables.go (0.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package build
+
+import (
+        "context"
+        "log/slog"
+        "os"
+        goruntime "runtime"
+
+        "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/spec/paths"
+        "github.com/cruciblehq/cruxd/internal/runtime"
+        "github.com/cruciblehq/spec/manifest"
+)
+
+// Controls recipe execution.
+type Options struct {
+        Recipe     *manifest.Recipe // Recipe to execute.
+        Resource   string           // Resource name, used as a prefix for container IDs.
+        Output     string           // Directory for the exported image.
+        Root       string           // Project root, for resolving copy sources.
+        Entrypoint []string         // OCI entrypoint for the output image (services only).
+        Platforms  []string         // Target platforms (e.g., ["linux/amd64"]). Defaults to host.
+}
+
+// Returned after successful recipe execution.
+type Result struct {
+        Output string // Directory containing the exported image.
+}
+
+// Executes a recipe against the container runtime.
+//
+// Stages are built in declaration order. Each stage starts a container from
+// its base image, executes the stage's steps, and the non-transient stage is
+// exported as the final image to the output directory.
+func Run(ctx context.Context, rt *runtime.Runtime, opts Options) (*Result, error) <span class="cov0" title="0">{
+        if len(opts.Platforms) == 0 </span><span class="cov0" title="0">{
+                opts.Platforms = []string{"linux/" + goruntime.GOARCH}
+        }</span>
+
+        <span class="cov0" title="0">slog.Info("executing recipe",
+                "resource", opts.Resource,
+                "output", opts.Output,
+                "stages", len(opts.Recipe.Stages),
+                "platforms", opts.Platforms,
+        )
+
+        if err := os.MkdirAll(opts.Output, paths.DefaultDirMode); err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrFileSystemOperation, err)
+        }</span>
+
+        <span class="cov0" title="0">return newRecipe(rt, opts).build(ctx, opts.Recipe.Stages)</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package build
+
+import (
+        "archive/tar"
+        "context"
+        "io"
+        "log/slog"
+        "os"
+        "path/filepath"
+        "strings"
+
+        "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/cruxd/internal/runtime"
+)
+
+// Executes a copy operation, transferring files into the container.
+//
+// The copy string has the format "src dest" for host copies, or "stage:src
+// dest" for cross-stage copies. Host sources are resolved relative to the
+// build context. Cross-stage sources are read from a named stage container's
+// filesystem.
+func executeCopy(ctx context.Context, ctr *runtime.Container, copyStr, workdir, buildCtx string, stages map[string]*runtime.Container) error <span class="cov0" title="0">{
+        src, dest, err := parseCopy(copyStr, workdir)
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrCopy, err)
+        }</span>
+
+        // Ensure the destination parent directory exists.
+        <span class="cov0" title="0">destDir := filepath.Dir(dest)
+        if destDir != "" </span><span class="cov0" title="0">{
+                if err := ctr.MkdirAll(ctx, destDir); err != nil </span><span class="cov0" title="0">{
+                        return crex.Wrap(ErrCopy, err)
+                }</span>
+        }
+
+        // Cross-stage copy: "stage:path".
+        <span class="cov0" title="0">if stage, path, ok := parseStageCopy(src); ok </span><span class="cov0" title="0">{
+                return executeStageCopy(ctx, ctr, stages, stage, path, dest)
+        }</span>
+
+        <span class="cov0" title="0">return executeHostCopy(ctx, ctr, src, dest, buildCtx)</span>
+}
+
+// Copies a file or directory from the host into the container.
+func executeHostCopy(ctx context.Context, ctr *runtime.Container, src, dest, buildCtx string) error <span class="cov0" title="0">{
+        if !filepath.IsAbs(src) </span><span class="cov0" title="0">{
+                src = filepath.Join(buildCtx, src)
+        }</span>
+
+        <span class="cov0" title="0">info, err := os.Stat(src)
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrCopy, err)
+        }</span>
+
+        <span class="cov0" title="0">slog.Debug("copy", "src", src, "dest", dest, "dir", info.IsDir())
+
+        pr, pw := io.Pipe()
+
+        go func() </span><span class="cov0" title="0">{
+                tw := tar.NewWriter(pw)
+                var writeErr error
+
+                if info.IsDir() </span><span class="cov0" title="0">{
+                        writeErr = writeDirToTar(tw, src, filepath.Base(dest))
+                }</span> else<span class="cov0" title="0"> {
+                        writeErr = writeFileToTar(tw, src, filepath.Base(dest))
+                }</span>
+
+                <span class="cov0" title="0">tw.Close()
+                pw.CloseWithError(writeErr)</span>
+        }()
+
+        <span class="cov0" title="0">if err := ctr.CopyTo(ctx, pr, filepath.Dir(dest)); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrCopy, err)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Copies a path from a named stage container into the target container.
+//
+// The tar stream is piped directly from the source container's CopyFrom
+// to the target container's CopyTo.
+func executeStageCopy(ctx context.Context, ctr *runtime.Container, stages map[string]*runtime.Container, stage, path, dest string) error <span class="cov0" title="0">{
+        srcCtr, ok := stages[stage]
+        if !ok </span><span class="cov0" title="0">{
+                return crex.Wrapf(ErrCopy, "unknown stage %q", stage)
+        }</span>
+
+        <span class="cov0" title="0">slog.Debug("cross-stage copy", "stage", stage, "src", path, "dest", dest)
+
+        pr, pw := io.Pipe()
+
+        errc := make(chan error, 1)
+        go func() </span><span class="cov0" title="0">{
+                errc &lt;- srcCtr.CopyFrom(ctx, pw, path)
+                pw.Close()
+        }</span>()
+
+        <span class="cov0" title="0">if err := ctr.CopyTo(ctx, pr, filepath.Dir(dest)); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrCopy, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := &lt;-errc; err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrCopy, err)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Parses a cross-stage copy source of the form "stage:path".
+//
+// Returns the stage name, the path within the stage, and true if the source
+// matches the cross-stage format. Returns false if it is a regular host path.
+func parseStageCopy(src string) (stage, path string, ok bool) <span class="cov8" title="1">{
+        i := strings.IndexByte(src, ':')
+        if i &lt; 1 </span><span class="cov8" title="1">{
+                return "", "", false
+        }</span>
+
+        // A colon after a path separator is not a stage prefix (e.g. "/foo:bar").
+        <span class="cov8" title="1">if strings.ContainsRune(src[:i], '/') </span><span class="cov8" title="1">{
+                return "", "", false
+        }</span>
+
+        <span class="cov8" title="1">return src[:i], src[i+1:], true</span>
+}
+
+// Parses a copy string into source and destination paths.
+//
+// The string must contain exactly two whitespace-separated tokens. If dest
+// is not absolute, it is joined with workdir.
+func parseCopy(s, workdir string) (src, dest string, err error) <span class="cov8" title="1">{
+        parts := strings.Fields(s)
+        if len(parts) != 2 </span><span class="cov8" title="1">{
+                return "", "", crex.Wrapf(ErrCopy, "missing source or destination in %q", s)
+        }</span>
+
+        <span class="cov8" title="1">src = parts[0]
+        dest = parts[1]
+
+        if !filepath.IsAbs(dest) </span><span class="cov8" title="1">{
+                if workdir == "" </span><span class="cov8" title="1">{
+                        return "", "", crex.Wrapf(ErrCopy, "relative dest %q requires workdir", dest)
+                }</span>
+                <span class="cov8" title="1">dest = filepath.Join(workdir, dest)</span>
+        }
+
+        <span class="cov8" title="1">return src, dest, nil</span>
+}
+
+// Writes a single file to a tar writer with the given archive name.
+func writeFileToTar(tw *tar.Writer, hostPath, name string) error <span class="cov0" title="0">{
+        info, err := os.Stat(hostPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">header, err := tar.FileInfoHeader(info, "")
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">header.Name = name
+
+        if err := tw.WriteHeader(header); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">f, err := os.Open(hostPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">defer f.Close()
+
+        _, err = io.Copy(tw, f)
+        return err</span>
+}
+
+// Writes a directory tree to a tar writer rooted at the given archive prefix.
+func writeDirToTar(tw *tar.Writer, hostDir, prefix string) error <span class="cov0" title="0">{
+        return filepath.WalkDir(hostDir, func(path string, d os.DirEntry, err error) error </span><span class="cov0" title="0">{
+                if err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+
+                <span class="cov0" title="0">relPath, err := filepath.Rel(hostDir, path)
+                if err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+
+                <span class="cov0" title="0">archivePath := filepath.ToSlash(filepath.Join(prefix, relPath))
+                return writeTarEntry(tw, path, archivePath, d)</span>
+        })
+}
+
+// Writes a single file or directory entry to a tar writer.
+func writeTarEntry(tw *tar.Writer, hostPath, archivePath string, d os.DirEntry) error <span class="cov0" title="0">{
+        info, err := d.Info()
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">header, err := tar.FileInfoHeader(info, "")
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">header.Name = archivePath
+
+        if err := tw.WriteHeader(header); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">if info.Mode().IsRegular() </span><span class="cov0" title="0">{
+                f, err := os.Open(hostPath)
+                if err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+                <span class="cov0" title="0">defer f.Close()
+                _, err = io.Copy(tw, f)
+                return err</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package build
+
+import (
+        "context"
+        "fmt"
+        "log/slog"
+        "os"
+        "path/filepath"
+        "strings"
+
+        "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/spec/paths"
+        "github.com/cruciblehq/cruxd/internal/runtime"
+        "github.com/cruciblehq/spec/manifest"
+)
+
+// Holds shared state for building all stages of a recipe.
+type recipe struct {
+        rt         *runtime.Runtime     // Container runtime for image and container operations.
+        resource   string               // Resource name, used as a prefix for container IDs.
+        output     string               // Output directory for the final build artifact.
+        context    string               // Directory containing the manifest, root for resolving copy sources.
+        entrypoint []string             // OCI entrypoint to set on the output image (services only).
+        platforms  []string             // Target platforms to build for.
+        containers []*runtime.Container // All stage containers across all platforms, destroyed after the build completes.
+}
+
+// Creates a new [recipe] from the given options.
+func newRecipe(rt *runtime.Runtime, opts Options) *recipe <span class="cov0" title="0">{
+        return &amp;recipe{
+                rt:         rt,
+                resource:   opts.Resource,
+                output:     opts.Output,
+                context:    opts.Root,
+                entrypoint: opts.Entrypoint,
+                platforms:  opts.Platforms,
+        }
+}</span>
+
+// Builds the recipe end-to-end against the container runtime.
+//
+// Each target platform is built independently. Stages are built in declaration
+// order for each platform. The non-transient stage is exported as the final
+// image to the platform's output directory. All stage containers are destroyed
+// when the build completes.
+func (r *recipe) build(ctx context.Context, recipeStages []manifest.Stage) (*Result, error) <span class="cov0" title="0">{
+        defer r.destroyContainers(ctx)
+
+        for _, platform := range r.platforms </span><span class="cov0" title="0">{
+                if err := r.buildPlatform(ctx, recipeStages, platform); err != nil </span><span class="cov0" title="0">{
+                        return nil, err
+                }</span>
+        }
+
+        <span class="cov0" title="0">return &amp;Result{Output: r.output}, nil</span>
+}
+
+// Builds all stages of the recipe for a single platform.
+//
+// Each platform maintains its own set of named stage containers for
+// cross-stage copy lookups. The output is written to a platform-specific
+// subdirectory when building for multiple platforms.
+func (r *recipe) buildPlatform(ctx context.Context, recipeStages []manifest.Stage, platform string) error <span class="cov0" title="0">{
+        slog.Info("building platform", "platform", platform)
+
+        output := r.platformOutput(platform)
+        if err := os.MkdirAll(output, paths.DefaultDirMode); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrFileSystemOperation, err)
+        }</span>
+
+        <span class="cov0" title="0">stages := make(map[string]*runtime.Container)
+
+        for i, stage := range recipeStages </span><span class="cov0" title="0">{
+                if err := r.buildStage(ctx, stage, i, platform, output, stages); err != nil </span><span class="cov0" title="0">{
+                        return crex.Wrapf(ErrBuild, "platform %s, stage %s: %w", platform, stageLabel(stage.Name, i), err)
+                }</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Builds a single stage of a recipe for a specific platform.
+//
+// Resolves the stage's base image, starts a build container, executes the
+// stage's steps, then commits the result. Non-transient stages are exported
+// to the output directory.
+func (r *recipe) buildStage(ctx context.Context, stage manifest.Stage, index int, platform, output string, stages map[string]*runtime.Container) error <span class="cov0" title="0">{
+        label := stageLabel(stage.Name, index)
+        slog.Info(fmt.Sprintf("building stage %s", label), "platform", platform)
+
+        src, err := stage.ParseFrom()
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">id := r.containerID(stage.Name, index, platform)
+        ctr, err := r.rt.StartContainer(ctx, src.Value, id, platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(runtime.ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">r.containers = append(r.containers, ctr)
+        if stage.Name != "" </span><span class="cov0" title="0">{
+                stages[stage.Name] = ctr
+        }</span>
+
+        <span class="cov0" title="0">if err := executeSteps(ctx, ctr, stage.Steps, newStepState(), r.context, stages); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">if !stage.Transient </span><span class="cov0" title="0">{
+                if err := ctr.Stop(ctx); err != nil </span><span class="cov0" title="0">{
+                        return crex.Wrap(runtime.ErrRuntime, err)
+                }</span>
+
+                <span class="cov0" title="0">if err := ctr.Export(ctx, output, r.entrypoint); err != nil </span><span class="cov0" title="0">{
+                        return crex.Wrap(runtime.ErrRuntime, err)
+                }</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Destroys all stage containers.
+func (r *recipe) destroyContainers(ctx context.Context) <span class="cov0" title="0">{
+        for _, ctr := range r.containers </span><span class="cov0" title="0">{
+                ctr.Destroy(ctx)
+        }</span>
+}
+
+// Returns a unique container ID for a stage, scoped to this resource and platform.
+func (r *recipe) containerID(name string, index int, platform string) string <span class="cov0" title="0">{
+        slug := platformSlug(platform)
+        if name != "" </span><span class="cov0" title="0">{
+                return fmt.Sprintf("%s-%s-stage-%s", r.resource, slug, name)
+        }</span>
+        <span class="cov0" title="0">return fmt.Sprintf("%s-%s-stage-%d", r.resource, slug, index+1)</span>
+}
+
+// Returns the output directory for a specific platform.
+//
+// When building for a single platform, the output directory is left as-is
+// to preserve the existing {output}/image.tar convention. For multi-platform
+// builds, each platform gets a subdirectory (e.g., {output}/linux-amd64).
+func (r *recipe) platformOutput(platform string) string <span class="cov0" title="0">{
+        if len(r.platforms) == 1 </span><span class="cov0" title="0">{
+                return r.output
+        }</span>
+        <span class="cov0" title="0">return filepath.Join(r.output, platformSlug(platform))</span>
+}
+
+// Converts a platform string to a filesystem-safe slug.
+//
+// Replaces slashes with dashes (e.g., "linux/amd64" becomes "linux-amd64").
+func platformSlug(platform string) string <span class="cov0" title="0">{
+        return strings.ReplaceAll(platform, "/", "-")
+}</span>
+
+// Returns a label for a stage, preferring the name when available and falling
+// back to the 1-based index.
+func stageLabel(name string, index int) string <span class="cov0" title="0">{
+        if name != "" </span><span class="cov0" title="0">{
+                return fmt.Sprintf("%q", name)
+        }</span>
+        <span class="cov0" title="0">return fmt.Sprintf("%d", index+1)</span>
+}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package build
+
+import (
+        "context"
+        "log/slog"
+
+        "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/cruxd/internal/runtime"
+        "github.com/cruciblehq/spec/manifest"
+)
+
+// Executes a list of steps in order against the build container.
+func executeSteps(ctx context.Context, ctr *runtime.Container, steps []manifest.Step, state *stepState, buildCtx string, stages map[string]*runtime.Container) error <span class="cov0" title="0">{
+        for i, step := range steps </span><span class="cov0" title="0">{
+                if err := executeStep(ctx, ctr, step, state, buildCtx, stages); err != nil </span><span class="cov0" title="0">{
+                        return crex.Wrapf(ErrBuild, "step %d: %w", i+1, err)
+                }</span>
+        }
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Executes a single step, dispatching to operation execution, group recursion,
+// or state mutation depending on the step's fields.
+func executeStep(ctx context.Context, ctr *runtime.Container, step manifest.Step, state *stepState, buildCtx string, stages map[string]*runtime.Container) error <span class="cov0" title="0">{
+        hasOp := step.Run != "" || step.Copy != ""
+
+        // Platform group: apply group-level modifiers and recurse.
+        if len(step.Steps) &gt; 0 </span><span class="cov0" title="0">{
+                state.apply(step)
+                return executeSteps(ctx, ctr, step.Steps, state, buildCtx, stages)
+        }</span>
+
+        // Operation with optional scoped modifiers.
+        <span class="cov0" title="0">if hasOp </span><span class="cov0" title="0">{
+                return executeOperation(ctx, ctr, step, state, buildCtx, stages)
+        }</span>
+
+        // Standalone modifier(s): persist in state.
+        <span class="cov0" title="0">state.apply(step)
+        return nil</span>
+}
+
+// Executes a run or copy operation with scoped modifier overrides.
+//
+// Step-level modifiers override the persistent state for this operation only.
+// The persistent state is not modified.
+func executeOperation(ctx context.Context, ctr *runtime.Container, step manifest.Step, state *stepState, buildCtx string, stages map[string]*runtime.Container) error <span class="cov0" title="0">{
+        resolved := state.resolve(step)
+
+        if resolved.workdir != "" </span><span class="cov0" title="0">{
+                if err := ctr.MkdirAll(ctx, resolved.workdir); err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+        }
+
+        <span class="cov0" title="0">switch </span>{
+        case step.Run != "":<span class="cov0" title="0">
+                slog.Debug("run", "command", step.Run, "shell", resolved.shell)
+                result, err := ctr.Exec(ctx, resolved.shell, step.Run, resolved.environ(), resolved.workdir)
+                if err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+                <span class="cov0" title="0">if result.ExitCode != 0 </span><span class="cov0" title="0">{
+                        return crex.Wrapf(ErrCommandFailed, "exit code %d: %s", result.ExitCode, result.Stderr)
+                }</span>
+
+        case step.Copy != "":<span class="cov0" title="0">
+                if err := executeCopy(ctx, ctr, step.Copy, resolved.workdir, buildCtx, stages); err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file4" style="display: none">package build
+
+import (
+        "maps"
+
+        "github.com/cruciblehq/spec/manifest"
+)
+
+// Default shell used for run steps when no shell modifier has been set.
+const defaultShell = "/bin/sh"
+
+// Tracks accumulated modifiers during step execution.
+//
+// State flows linearly through the step list. Standalone modifiers update
+// the state permanently via apply. Operations read the effective values for
+// a single step via resolve without modifying the persistent state.
+type stepState struct {
+        shell   string
+        workdir string
+        env     map[string]string
+}
+
+// Creates a new [stepState] with default values.
+func newStepState() *stepState <span class="cov8" title="1">{
+        return &amp;stepState{
+                shell: defaultShell,
+                env:   make(map[string]string),
+        }
+}</span>
+
+// Persists modifier fields from a step into the state.
+//
+// Called for standalone modifier steps and platform groups. The state is
+// mutated permanently, affecting all subsequent steps.
+func (s *stepState) apply(step manifest.Step) <span class="cov8" title="1">{
+        if step.Shell != "" </span><span class="cov8" title="1">{
+                s.shell = step.Shell
+        }</span>
+        <span class="cov8" title="1">if step.Workdir != "" </span><span class="cov8" title="1">{
+                s.workdir = step.Workdir
+        }</span>
+        <span class="cov8" title="1">maps.Copy(s.env, step.Env)</span>
+}
+
+// Returns a new [stepState] with step-level modifiers overlaid on the
+// persistent state. The receiver is not modified.
+//
+// Step-level modifiers override the corresponding state values for this
+// operation only.
+func (s *stepState) resolve(step manifest.Step) *stepState <span class="cov8" title="1">{
+        resolved := &amp;stepState{
+                shell:   s.shell,
+                workdir: s.workdir,
+                env:     make(map[string]string, len(s.env)+len(step.Env)),
+        }
+        maps.Copy(resolved.env, s.env)
+        maps.Copy(resolved.env, step.Env)
+
+        if step.Shell != "" </span><span class="cov8" title="1">{
+                resolved.shell = step.Shell
+        }</span>
+        <span class="cov8" title="1">if step.Workdir != "" </span><span class="cov8" title="1">{
+                resolved.workdir = step.Workdir
+        }</span>
+
+        <span class="cov8" title="1">return resolved</span>
+}
+
+// Formats the environment as a list of "key=value" strings suitable for
+// passing to container exec.
+func (s *stepState) environ() []string <span class="cov8" title="1">{
+        env := make([]string, 0, len(s.env))
+        for k, v := range s.env </span><span class="cov8" title="1">{
+                env = append(env, k+"="+v)
+        }</span>
+        <span class="cov8" title="1">return env</span>
+}
+</pre>
+		
+		<pre class="file" id="file5" style="display: none">package cli
+
+import (
+        "log/slog"
+        "os"
+
+        "github.com/alecthomas/kong"
+        "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/cruxd/internal"
+)
+
+// Represents the root command for the cruxd daemon.
+var RootCmd struct {
+        Quiet   bool   `short:"q" help:"Suppress informational output."`
+        Verbose bool   `short:"v" help:"Enable verbose output."`
+        Debug   bool   `short:"d" help:"Enable debug output."`
+        Socket  string `short:"s" help:"Override the default Unix socket path." placeholder:"PATH"`
+}
+
+// Parses arguments and configures logging.
+func Execute() <span class="cov0" title="0">{
+
+        kong.Parse(&amp;RootCmd,
+                kong.Name(internal.Name),
+                kong.Description("The Crucible daemon.\n\nListens on a Unix domain socket for commands from the crux CLI."),
+                kong.UsageOnError(),
+                kong.Vars{
+                        "version": internal.VersionString(),
+                },
+        )
+
+        configureLogger()
+}</span>
+
+// Configures the global logger based on CLI flags.
+func configureLogger() <span class="cov0" title="0">{
+        handler, ok := slog.Default().Handler().(crex.Handler)
+        if !ok </span><span class="cov0" title="0">{
+                return // Not a crex.Handler, nothing to configure
+        }</span>
+
+        <span class="cov0" title="0">debug := RootCmd.Debug || internal.IsDebug()
+        quiet := RootCmd.Quiet || internal.IsQuiet()
+        verbose := RootCmd.Verbose || internal.IsVerbose()
+
+        // Configure formatter
+        formatter := crex.NewPrettyFormatter(isatty(os.Stderr))
+        formatter.SetVerbose(verbose)
+
+        // Configure handler
+        if debug </span><span class="cov0" title="0">{
+                handler.SetLevel(slog.LevelDebug)
+        }</span> else<span class="cov0" title="0"> if quiet </span><span class="cov0" title="0">{
+                handler.SetLevel(slog.LevelWarn)
+        }</span> else<span class="cov0" title="0"> {
+                handler.SetLevel(slog.LevelInfo)
+        }</span>
+
+        // Commit
+        <span class="cov0" title="0">handler.SetFormatter(formatter)
+        handler.SetStream(os.Stderr)
+        handler.Flush()</span>
+}
+
+// Whether the given file is an interactive terminal.
+func isatty(f *os.File) bool <span class="cov0" title="0">{
+        info, err := f.Stat()
+        if err != nil </span><span class="cov0" title="0">{
+                return false
+        }</span>
+        <span class="cov0" title="0">return (info.Mode() &amp; os.ModeCharDevice) != 0</span>
+}
+</pre>
+		
+		<pre class="file" id="file6" style="display: none">package internal
+
+import (
+        "strconv"
+        "sync/atomic"
+)
+
+var (
+        quietMode   atomic.Bool // Indicates whether quiet mode is enabled.
+        debugMode   atomic.Bool // Indicates whether debug logging is enabled.
+        verboseMode atomic.Bool // Indicates whether verbose logging is enabled.
+)
+
+// Parses the linker flags into usable runtime variables.
+//
+// The rawQuiet, rawDebug, and rawVerbose variables should be set via ldflags
+// during the build process. If not set, they default to "false".
+func init() <span class="cov0" title="0">{
+        if v, err := strconv.ParseBool(rawQuiet); err == nil </span><span class="cov0" title="0">{
+                quietMode.Store(v)
+        }</span>
+        <span class="cov0" title="0">if v, err := strconv.ParseBool(rawDebug); err == nil </span><span class="cov0" title="0">{
+                debugMode.Store(v)
+        }</span>
+        <span class="cov0" title="0">if v, err := strconv.ParseBool(rawVerbose); err == nil </span><span class="cov0" title="0">{
+                verboseMode.Store(v)
+        }</span>
+}
+
+// Enables or disables quiet mode.
+func SetQuiet(enabled bool) <span class="cov0" title="0">{
+        quietMode.Store(enabled)
+}</span>
+
+// Returns true if quiet mode is enabled.
+func IsQuiet() bool <span class="cov0" title="0">{
+        return quietMode.Load()
+}</span>
+
+// Enables or disables debug mode.
+func SetDebug(enabled bool) <span class="cov0" title="0">{
+        debugMode.Store(enabled)
+}</span>
+
+// Returns true if debug mode is enabled.
+func IsDebug() bool <span class="cov0" title="0">{
+        return debugMode.Load()
+}</span>
+
+// Enables or disables verbose logging.
+func SetVerbose(enabled bool) <span class="cov0" title="0">{
+        verboseMode.Store(enabled)
+}</span>
+
+// Returns true if verbose logging is enabled.
+func IsVerbose() bool <span class="cov0" title="0">{
+        return verboseMode.Load()
+}</span>
+</pre>
+		
+		<pre class="file" id="file7" style="display: none">package runtime
+
+import (
+        "context"
+        "log/slog"
+        "syscall"
+
+        containerd "github.com/containerd/containerd/v2/client"
+        "github.com/containerd/containerd/v2/pkg/cio"
+        "github.com/containerd/containerd/v2/pkg/oci"
+        "github.com/containerd/errdefs"
+        "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/spec/protocol"
+        specs "github.com/opencontainers/runtime-spec/specs-go"
+)
+
+// A running build container backed by containerd.
+type Container struct {
+        client   *containerd.Client // Containerd client for managing the container.
+        id       string             // Unique identifier for the container, used as the containerd container ID.
+        platform string             // OCI platform (e.g., "linux/amd64").
+}
+
+// Queries the current state of the container.
+//
+// Returns [protocol.ContainerRunning] if the task is active,
+// [protocol.ContainerStopped] if the container exists but has no running
+// task, or [protocol.ContainerNotCreated] if the container does not exist.
+func (c *Container) Status(ctx context.Context) (protocol.ContainerState, error) <span class="cov0" title="0">{
+        ctr, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                if errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                        return protocol.ContainerNotCreated, nil
+                }</span>
+                <span class="cov0" title="0">return "", crex.Wrap(ErrRuntime, err)</span>
+        }
+
+        <span class="cov0" title="0">task, err := ctr.Task(ctx, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                if errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                        return protocol.ContainerStopped, nil
+                }</span>
+                <span class="cov0" title="0">return "", crex.Wrap(ErrRuntime, err)</span>
+        }
+
+        <span class="cov0" title="0">status, err := task.Status(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">switch status.Status </span>{
+        case containerd.Running:<span class="cov0" title="0">
+                return protocol.ContainerRunning, nil</span>
+        default:<span class="cov0" title="0">
+                return protocol.ContainerStopped, nil</span>
+        }
+}
+
+// Stops the container's task.
+//
+// The running task is killed and deleted. The container metadata is preserved.
+// Calling Stop on an already-stopped container is not an error.
+func (c *Container) Stop(ctx context.Context) error <span class="cov0" title="0">{
+        ctr, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                if errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                        return nil
+                }</span>
+                <span class="cov0" title="0">return crex.Wrap(ErrRuntime, err)</span>
+        }
+
+        <span class="cov0" title="0">task, err := ctr.Task(ctx, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                if errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                        return nil
+                }</span>
+                <span class="cov0" title="0">return crex.Wrap(ErrRuntime, err)</span>
+        }
+
+        <span class="cov0" title="0">task.Kill(ctx, syscall.SIGKILL)
+        if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil &amp;&amp; !errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Removes the container and its resources.
+//
+// The task is killed and the container is removed from containerd along
+// with its snapshot. After destruction the handle is invalid.
+func (c *Container) Destroy(ctx context.Context) <span class="cov0" title="0">{
+        ctr, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                if !errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                        slog.Warn("failed to load container for destruction", "id", c.id, "error", err)
+                }</span>
+                <span class="cov0" title="0">return</span>
+        }
+
+        <span class="cov0" title="0">if task, err := ctr.Task(ctx, nil); err == nil </span><span class="cov0" title="0">{
+                task.Kill(ctx, syscall.SIGKILL)
+                task.Delete(ctx, containerd.WithProcessKill)
+        }</span>
+
+        <span class="cov0" title="0">if err := ctr.Delete(ctx, containerd.WithSnapshotCleanup); err != nil &amp;&amp; !errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                slog.Warn("failed to delete container during destruction", "id", c.id, "error", err)
+        }</span>
+}
+
+// Creates the containerd container with the standard build configuration.
+func (c *Container) create(ctx context.Context, image containerd.Image) (containerd.Container, error) <span class="cov0" title="0">{
+        return c.client.NewContainer(ctx, c.id,
+                containerd.WithImage(image),
+                containerd.WithSnapshotter(snapshotter),
+                containerd.WithNewSnapshot(c.id, image),
+                containerd.WithRuntime(ociRuntime, nil),
+                containerd.WithNewSpec(
+                        oci.WithDefaultSpecForPlatform(c.platform),
+                        oci.WithImageConfig(image),
+                        oci.WithHostNamespace(specs.NetworkNamespace),
+                        oci.WithHostResolvconf,
+                        oci.WithProcessArgs("sleep", "infinity"),
+                ),
+        )
+}</span>
+
+// Starts the container's long-running task with no attached IO.
+func (c *Container) startTask(ctx context.Context, ctr containerd.Container) error <span class="cov0" title="0">{
+        task, err := ctr.NewTask(ctx, cio.NullIO)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">if err := task.Start(ctx); err != nil </span><span class="cov0" title="0">{
+                task.Delete(ctx)
+                return err
+        }</span>
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Removes an existing container with this ID, if one exists.
+//
+// Any running task is killed and the container is deleted along with its
+// snapshot. This is a no-op when no container with the ID is found.
+func (c *Container) remove(ctx context.Context) <span class="cov0" title="0">{
+        existing, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                return
+        }</span>
+        <span class="cov0" title="0">if task, err := existing.Task(ctx, nil); err == nil </span><span class="cov0" title="0">{
+                task.Kill(ctx, syscall.SIGKILL)
+                task.Delete(ctx, containerd.WithProcessKill)
+        }</span>
+        <span class="cov0" title="0">existing.Delete(ctx, containerd.WithSnapshotCleanup)</span>
+}
+</pre>
+		
+		<pre class="file" id="file8" style="display: none">package runtime
+
+import (
+        "context"
+        "io"
+        "path/filepath"
+
+        "github.com/cruciblehq/crex"
+)
+
+// Creates a directory inside the container, including parents.
+func (c *Container) MkdirAll(ctx context.Context, path string) error <span class="cov0" title="0">{
+        return c.mustExec(ctx, "mkdir", nil, nil, "mkdir", "-p", path)
+}</span>
+
+// Copies a tar stream into the container's filesystem.
+//
+// The contents of r are extracted into destDir by piping them to "tar xf - -C
+// destDir" inside the container.
+func (c *Container) CopyTo(ctx context.Context, r io.Reader, destDir string) error <span class="cov0" title="0">{
+        return c.mustExec(ctx, "tar extract", r, nil, "tar", "xf", "-", "-C", destDir)
+}</span>
+
+// Copies a path from the container's filesystem as a tar stream.
+//
+// The file or directory at path is archived by running "tar cf - -C &lt;dir&gt;
+// &lt;base&gt;" inside the container and streaming the output to w.
+func (c *Container) CopyFrom(ctx context.Context, w io.Writer, path string) error <span class="cov0" title="0">{
+        return c.mustExec(ctx, "tar archive", nil, w, "tar", "cf", "-", "-C", filepath.Dir(path), filepath.Base(path))
+}</span>
+
+// Helper method that runs a command inside the container, returning an error
+// that includes desc if the process exits with a non-zero code.
+func (c *Container) mustExec(ctx context.Context, desc string, stdin io.Reader, stdout io.Writer, args ...string) error <span class="cov0" title="0">{
+        exitCode, stderr, err := c.execCommand(ctx, stdin, stdout, nil, "", args...)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">if exitCode != 0 </span><span class="cov0" title="0">{
+                return crex.Wrapf(ErrRuntime, "%s failed with exit code %d (%s)", desc, exitCode, stderr)
+        }</span>
+        <span class="cov0" title="0">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file9" style="display: none">package runtime
+
+import (
+        "bytes"
+        "context"
+        "fmt"
+        "io"
+        "strings"
+        "sync/atomic"
+
+        "github.com/containerd/containerd/v2/pkg/cio"
+        "github.com/cruciblehq/crex"
+        specs "github.com/opencontainers/runtime-spec/specs-go"
+)
+
+// Sequence counter for generating unique exec process identifiers.
+var execSeq uint64
+
+// Returns a unique exec process identifier.
+func nextExecID() string <span class="cov8" title="1">{
+        return fmt.Sprintf("exec-%d", atomic.AddUint64(&amp;execSeq, 1))
+}</span>
+
+// Output of a command execution inside a container.
+type ExecResult struct {
+        ExitCode int    // Exit code of the process.
+        Stdout   string // Captured standard output.
+        Stderr   string // Captured standard error.
+}
+
+// Runs a command inside the container.
+//
+// The command is passed to the shell as a single argument via "shell -c
+// command". Environment variables and working directory override the
+// container's OCI spec for this execution only.
+func (c *Container) Exec(ctx context.Context, shell, command string, env []string, workdir string) (*ExecResult, error) <span class="cov0" title="0">{
+        var stdout bytes.Buffer
+        exitCode, stderr, err := c.execCommand(ctx, nil, &amp;stdout, env, workdir, shell, "-c", command)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">return &amp;ExecResult{
+                ExitCode: exitCode,
+                Stdout:   stdout.String(),
+                Stderr:   stderr,
+        }, nil</span>
+}
+
+// Runs a command and arguments directly inside the container.
+//
+// Unlike [Exec], which passes a command string to a shell, ExecArgs runs the
+// command directly without shell wrapping. This is suitable for CLI-invoked
+// exec where the user provides the full command line.
+func (c *Container) ExecArgs(ctx context.Context, args []string) (*ExecResult, error) <span class="cov0" title="0">{
+        pspec, err := c.buildProcessSpec(ctx, nil, "", args...)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">var stdout, stderr bytes.Buffer
+        exitCode, err := c.execProcess(ctx, pspec, nil, &amp;stdout, &amp;stderr)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">return &amp;ExecResult{
+                ExitCode: exitCode,
+                Stdout:   stdout.String(),
+                Stderr:   stderr.String(),
+        }, nil</span>
+}
+
+// Builds an OCI process spec for running a command inside the container.
+//
+// A process spec defines everything needed to start a process: the command
+// and arguments, environment variables, working directory, and terminal mode.
+// The base values are copied from the container's own OCI spec, then env and
+// workdir are overridden if provided.
+func (c *Container) buildProcessSpec(ctx context.Context, env []string, workdir string, args ...string) (*specs.Process, error) <span class="cov0" title="0">{
+        ctr, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">spec, err := ctr.Spec(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">pspec := *spec.Process
+        pspec.Terminal = false
+        pspec.Args = args
+
+        if len(env) &gt; 0 </span><span class="cov0" title="0">{
+                pspec.Env = mergeEnv(pspec.Env, env)
+        }</span>
+        <span class="cov0" title="0">if workdir != "" </span><span class="cov0" title="0">{
+                pspec.Cwd = workdir
+        }</span>
+
+        <span class="cov0" title="0">return &amp;pspec, nil</span>
+}
+
+// Merges override env vars on top of a base env slice.
+func mergeEnv(base, overrides []string) []string <span class="cov8" title="1">{
+        merged := make(map[string]string, len(base)+len(overrides))
+        for _, entry := range base </span><span class="cov8" title="1">{
+                if k, v, ok := strings.Cut(entry, "="); ok </span><span class="cov8" title="1">{
+                        merged[k] = v
+                }</span>
+        }
+        <span class="cov8" title="1">for _, entry := range overrides </span><span class="cov8" title="1">{
+                if k, v, ok := strings.Cut(entry, "="); ok </span><span class="cov8" title="1">{
+                        merged[k] = v
+                }</span>
+        }
+
+        <span class="cov8" title="1">result := make([]string, 0, len(merged))
+        for k, v := range merged </span><span class="cov8" title="1">{
+                result = append(result, k+"="+v)
+        }</span>
+        <span class="cov8" title="1">return result</span>
+}
+
+// Runs a command inside the container, returning the exit code and captured
+// stderr. Builds the process spec from args, then delegates to execProcess.
+// A non-zero exit code is not treated as an error; the caller decides.
+func (c *Container) execCommand(ctx context.Context, stdin io.Reader, stdout io.Writer, env []string, workdir string, args ...string) (int, string, error) <span class="cov0" title="0">{
+        pspec, err := c.buildProcessSpec(ctx, env, workdir, args...)
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, "", crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">var stderr bytes.Buffer
+        exitCode, err := c.execProcess(ctx, pspec, stdin, stdout, &amp;stderr)
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, "", err
+        }</span>
+        <span class="cov0" title="0">return exitCode, stderr.String(), nil</span>
+}
+
+// Starts a process inside the container's running task, waits for it to exit,
+// and returns the exit code.
+//
+// The process is attached to the task as an additional exec, not as the
+// primary process. This requires the task to already be running (started by
+// [Container.startTask] during container creation). stdin, stdout, and stderr
+// are connected to the process. Nil streams are replaced with io.Discard
+// (stdout/stderr) or left disconnected (stdin). A non-zero exit code is not
+// treated as an error; the caller decides how to handle it.
+func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin io.Reader, stdout, stderr io.Writer) (int, error) <span class="cov0" title="0">{
+        ctr, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">task, err := ctr.Task(ctx, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if stdout == nil </span><span class="cov0" title="0">{
+                stdout = io.Discard
+        }</span>
+        <span class="cov0" title="0">if stderr == nil </span><span class="cov0" title="0">{
+                stderr = io.Discard
+        }</span>
+
+        <span class="cov0" title="0">process, err := task.Exec(ctx, nextExecID(), pspec, cio.NewCreator(
+                cio.WithStreams(stdin, stdout, stderr),
+        ))
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">statusC, err := process.Wait(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                process.Delete(ctx)
+                return 0, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := process.Start(ctx); err != nil </span><span class="cov0" title="0">{
+                process.Delete(ctx)
+                return 0, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">exitStatus := &lt;-statusC
+        process.Delete(ctx)
+
+        code, _, err := exitStatus.Result()
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">return int(code), nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file10" style="display: none">package runtime
+
+import (
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "log/slog"
+        "os"
+        "path/filepath"
+
+        "github.com/containerd/containerd/v2/core/containers"
+        "github.com/containerd/containerd/v2/core/content"
+        "github.com/containerd/containerd/v2/core/images"
+        "github.com/containerd/containerd/v2/core/images/archive"
+        "github.com/containerd/containerd/v2/pkg/rootfs"
+        "github.com/cruciblehq/crex"
+        "github.com/opencontainers/go-digest"
+        ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+)
+
+// Filename of the OCI archive produced by Export.
+const exportFilename = "image.tar"
+
+// Commits the container's filesystem changes and exports the result as an
+// OCI archive.
+//
+// The diff between the container's snapshot and its parent is stored as a
+// new layer. If entrypoint is non-empty it is set on the image config.
+// The resulting image is written to output/image.tar.
+func (c *Container) Export(ctx context.Context, output string, entrypoint []string) error <span class="cov0" title="0">{
+        loaded, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">info, err := loaded.Info(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">layer, diffID, err := c.snapshotDiff(ctx, info)
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := c.updateImage(ctx, info.Image, func(manifest *ocispec.Manifest, config *ocispec.Image) </span><span class="cov0" title="0">{
+                manifest.Layers = append(manifest.Layers, layer)
+                config.RootFS.DiffIDs = append(config.RootFS.DiffIDs, diffID)
+                if len(entrypoint) &gt; 0 </span><span class="cov0" title="0">{
+                        config.Config.Entrypoint = entrypoint
+                        config.Config.Cmd = nil
+                }</span>
+        }); err != nil <span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">exportPath := filepath.Join(output, exportFilename)
+        if err := c.exportImage(ctx, info.Image, exportPath); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">slog.Info("image exported", "path", exportPath)
+        return nil</span>
+}
+
+// Computes the diff between the container's snapshot and its parent, returning
+// the layer descriptor and its diff ID without modifying the image.
+func (c *Container) snapshotDiff(ctx context.Context, info containers.Container) (ocispec.Descriptor, digest.Digest, error) <span class="cov0" title="0">{
+        layer, err := rootfs.CreateDiff(ctx,
+                info.SnapshotKey,
+                c.client.SnapshotService(info.Snapshotter),
+                c.client.DiffService(),
+        )
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, "", err
+        }</span>
+
+        <span class="cov0" title="0">diffID, err := images.GetDiffID(ctx, c.client.ContentStore(), layer)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, "", err
+        }</span>
+
+        <span class="cov0" title="0">return layer, diffID, nil</span>
+}
+
+// Writes the named image to an OCI tar archive at the given path.
+func (c *Container) exportImage(ctx context.Context, imageName, path string) error <span class="cov0" title="0">{
+        f, err := os.Create(path)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">defer f.Close()
+
+        return c.client.Export(ctx, f, archive.WithImage(c.client.ImageService(), imageName))</span>
+}
+
+// Loads the image's manifest and config, applies the mutation, and writes
+// the updated blobs back to the content store.
+func (c *Container) updateImage(ctx context.Context, imageName string, mutate func(*ocispec.Manifest, *ocispec.Image)) error <span class="cov0" title="0">{
+        is := c.client.ImageService()
+
+        img, err := is.Get(ctx, imageName)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">manifest, err := c.readManifest(ctx, img.Target)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">config, err := c.readConfig(ctx, manifest.Config)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">mutate(&amp;manifest, &amp;config)
+
+        newConfigDesc, err := c.writeBlob(ctx, manifest.Config.MediaType, config, imageName+"-config")
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">manifest.Config = newConfigDesc
+
+        manifestLabels := manifestGCLabels(manifest)
+        newManifestDesc, err := c.writeBlob(ctx, img.Target.MediaType, manifest, imageName+"-manifest", content.WithLabels(manifestLabels))
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">img.Target = newManifestDesc
+        _, err = is.Update(ctx, img, "target")
+        return err</span>
+}
+
+// Loads an OCI manifest from the content store.
+func (c *Container) readManifest(ctx context.Context, desc ocispec.Descriptor) (ocispec.Manifest, error) <span class="cov0" title="0">{
+        b, err := content.ReadBlob(ctx, c.client.ContentStore(), desc)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Manifest{}, err
+        }</span>
+        <span class="cov0" title="0">var m ocispec.Manifest
+        if err := json.Unmarshal(b, &amp;m); err != nil </span><span class="cov0" title="0">{
+                return ocispec.Manifest{}, err
+        }</span>
+        <span class="cov0" title="0">return m, nil</span>
+}
+
+// Loads an OCI image config from the content store.
+func (c *Container) readConfig(ctx context.Context, desc ocispec.Descriptor) (ocispec.Image, error) <span class="cov0" title="0">{
+        b, err := content.ReadBlob(ctx, c.client.ContentStore(), desc)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Image{}, err
+        }</span>
+        <span class="cov0" title="0">var img ocispec.Image
+        if err := json.Unmarshal(b, &amp;img); err != nil </span><span class="cov0" title="0">{
+                return ocispec.Image{}, err
+        }</span>
+        <span class="cov0" title="0">return img, nil</span>
+}
+
+// Serializes a value and writes it to the content store, returning the
+// descriptor that references the stored blob.
+func (c *Container) writeBlob(ctx context.Context, mediaType string, v any, ref string, opts ...content.Opt) (ocispec.Descriptor, error) <span class="cov0" title="0">{
+        cs := c.client.ContentStore()
+        b, err := json.Marshal(v)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, err
+        }</span>
+        <span class="cov0" title="0">desc := ocispec.Descriptor{
+                MediaType: mediaType,
+                Digest:    digest.FromBytes(b),
+                Size:      int64(len(b)),
+        }
+        if err := content.WriteBlob(ctx, cs, ref, bytes.NewReader(b), desc, opts...); err != nil </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, err
+        }</span>
+        <span class="cov0" title="0">return desc, nil</span>
+}
+
+// Computes containerd GC reference labels for a manifest's children.
+//
+// These labels allow containerd's garbage collector to trace reachability
+// from the manifest blob to its config and layer blobs.
+func manifestGCLabels(m ocispec.Manifest) map[string]string <span class="cov8" title="1">{
+        labels := map[string]string{
+                "containerd.io/gc.ref.content.config": m.Config.Digest.String(),
+        }
+        for i, layer := range m.Layers </span><span class="cov8" title="1">{
+                key := fmt.Sprintf("containerd.io/gc.ref.content.l.%d", i)
+                labels[key] = layer.Digest.String()
+        }</span>
+        <span class="cov8" title="1">return labels</span>
+}
+</pre>
+		
+		<pre class="file" id="file11" style="display: none">package runtime
+
+import (
+        "context"
+        "crypto/sha256"
+        "encoding/hex"
+        "fmt"
+        "log/slog"
+        "os"
+        goruntime "runtime"
+        "syscall"
+
+        containerd "github.com/containerd/containerd/v2/client"
+        "github.com/containerd/containerd/v2/core/images"
+        "github.com/containerd/errdefs"
+        "github.com/containerd/platforms"
+        "github.com/cruciblehq/crex"
+)
+
+const (
+
+        // Snapshotter used for container filesystems.
+        snapshotter = "overlayfs"
+
+        // OCI runtime shim for running containers.
+        ociRuntime = "io.containerd.runc.v2"
+)
+
+// Manages the containerd client and provides image and container operations.
+type Runtime struct {
+        client *containerd.Client // Containerd client for managing containers and images.
+}
+
+// Creates a runtime connected to the containerd socket at the given address.
+//
+// The namespace scopes all containerd operations to a single tenant. The
+// runtime must be closed when no longer needed.
+func New(address, namespace string) (*Runtime, error) <span class="cov0" title="0">{
+        client, err := containerd.New(address, containerd.WithDefaultNamespace(namespace))
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+        <span class="cov0" title="0">return &amp;Runtime{client: client}, nil</span>
+}
+
+// Closes the containerd client connection.
+func (rt *Runtime) Close() error <span class="cov0" title="0">{
+        return rt.client.Close()
+}</span>
+
+// Imports an OCI archive, unpacks it for the target platform, and starts
+// a container.
+//
+// The archive is imported into containerd's content store and tagged with
+// a deterministic name derived from the path. The layers for the target
+// platform are unpacked into the snapshotter, a container is created with
+// a fresh snapshot, and a long-running task (sleep infinity) is started so
+// that subsequent Exec calls have a running process to attach to. Any existing
+// container with the same ID is removed before the new one is created.
+// Building for a platform other than the host requires QEMU / binfmt_misc
+// support in the kernel.
+func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, platform string) (*Container, error) <span class="cov0" title="0">{
+        tag := imageTag(path)
+
+        source, err := rt.importArchive(ctx, path)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := rt.tagImage(ctx, source, tag); err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := rt.unpackImage(ctx, tag, platform); err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">c := &amp;Container{
+                client:   rt.client,
+                id:       id,
+                platform: platform,
+        }
+
+        // Remove any stale container from a previous build with the same ID.
+        c.remove(ctx)
+
+        image, err := rt.resolveImage(ctx, tag, platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">ctr, err := c.create(ctx, image)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := c.startTask(ctx, ctr); err != nil </span><span class="cov0" title="0">{
+                ctr.Delete(ctx, containerd.WithSnapshotCleanup)
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">slog.Debug("container started", "id", id, "image", tag)
+
+        return c, nil</span>
+}
+
+// Imports an OCI archive into the content store.
+//
+// The archive must contain exactly one image. Multi-platform archives
+// are supported (single OCI index with per-platform manifests).
+func (rt *Runtime) importArchive(ctx context.Context, path string) (images.Image, error) <span class="cov0" title="0">{
+        fh, err := os.Open(path)
+        if err != nil </span><span class="cov0" title="0">{
+                return images.Image{}, err
+        }</span>
+        <span class="cov0" title="0">defer fh.Close()
+
+        imported, err := rt.client.Import(ctx, fh)
+        if err != nil </span><span class="cov0" title="0">{
+                return images.Image{}, err
+        }</span>
+
+        // Import returns one record per image in the archive's index.json.
+        // A multi-platform archive has a single entry (an OCI index that
+        // internally references per-platform manifests); platform selection
+        // happens later via platformImage. Multiple records would mean
+        // multiple unrelated images, which we don't support.
+        <span class="cov0" title="0">if len(imported) == 0 </span><span class="cov0" title="0">{
+                return images.Image{}, ErrEmptyArchive
+        }</span> else<span class="cov0" title="0"> if len(imported) &gt; 1 </span><span class="cov0" title="0">{
+                return images.Image{}, ErrMultipleImages
+        }</span>
+
+        <span class="cov0" title="0">return imported[0], nil</span>
+}
+
+// Tags an imported image under a deterministic name.
+//
+// Updates the tag if it already exists. Removes the source record when
+// its name differs from the tag to avoid duplicates.
+func (rt *Runtime) tagImage(ctx context.Context, source images.Image, tag string) error <span class="cov0" title="0">{
+        is := rt.client.ImageService()
+
+        img := images.Image{
+                Name:   tag,
+                Target: source.Target,
+        }
+
+        if _, err := is.Create(ctx, img); err != nil </span><span class="cov0" title="0">{
+                if !errdefs.IsAlreadyExists(err) </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+                <span class="cov0" title="0">if _, err := is.Update(ctx, img, "target"); err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+        }
+
+        <span class="cov0" title="0">if source.Name != tag </span><span class="cov0" title="0">{
+                _ = is.Delete(ctx, source.Name)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Unpacks the image layers for the target platform into the snapshotter.
+func (rt *Runtime) unpackImage(ctx context.Context, tag, platform string) error <span class="cov0" title="0">{
+        image, err := rt.resolveImage(ctx, tag, platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">return image.Unpack(ctx, snapshotter)</span>
+}
+
+// Looks up a tagged image and selects the manifest for the given platform.
+//
+// Multi-platform images contain manifests for multiple architectures. This
+// method selects one, so that subsequent operations target the correct
+// architecture.
+func (rt *Runtime) resolveImage(ctx context.Context, tag, platform string) (containerd.Image, error) <span class="cov0" title="0">{
+        p, err := platforms.Parse(platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">img, err := rt.client.ImageService().Get(ctx, tag)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">return containerd.NewImageWithPlatform(rt.client, img, platforms.Only(p)), nil</span>
+}
+
+// Produces a containerd image tag from an archive path.
+//
+// The path is hashed to produce a tag that is always valid for OCI references
+// regardless of which characters the path contains.
+func imageTag(path string) string <span class="cov8" title="1">{
+        h := sha256.Sum256([]byte(path))
+        return fmt.Sprintf("import/%s:latest", hex.EncodeToString(h[:]))
+}</span>
+
+// Returns the default OCI platform for the host architecture.
+func defaultPlatform() string <span class="cov8" title="1">{
+        return "linux/" + goruntime.GOARCH
+}</span>
+
+// Imports an OCI archive, tags it under the given name, and unpacks it for
+// the host platform.
+//
+// The archive is imported into the content store, tagged with the provided
+// name, and the layers are unpacked into the snapshotter.
+func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error <span class="cov0" title="0">{
+        source, err := rt.importArchive(ctx, path)
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := rt.tagImage(ctx, source, tag); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">platform := defaultPlatform()
+        if err := rt.unpackImage(ctx, tag, platform); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">slog.Debug("image imported", "tag", tag)
+        return nil</span>
+}
+
+// Starts a container from a previously imported image tag.
+//
+// Any stale container with the same ID is cleaned up first. The container
+// runs detached with a long-running task.
+func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container, error) <span class="cov0" title="0">{
+        platform := defaultPlatform()
+
+        c := &amp;Container{
+                client:   rt.client,
+                id:       id,
+                platform: platform,
+        }
+
+        c.remove(ctx)
+
+        image, err := rt.resolveImage(ctx, tag, platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">ctr, err := c.create(ctx, image)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := c.startTask(ctx, ctr); err != nil </span><span class="cov0" title="0">{
+                ctr.Delete(ctx, containerd.WithSnapshotCleanup)
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">slog.Debug("container started", "id", id, "image", tag)
+        return c, nil</span>
+}
+
+// Removes an image and all containers created from it.
+//
+// Containers are discovered by querying containerd for records whose image
+// field matches the tag. Each container's task is killed before the container
+// and its snapshot are deleted.
+func (rt *Runtime) DestroyImage(ctx context.Context, tag string) error <span class="cov0" title="0">{
+        ctrs, err := rt.client.Containers(ctx, fmt.Sprintf("image==%s", tag))
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">for _, ctr := range ctrs </span><span class="cov0" title="0">{
+                if task, taskErr := ctr.Task(ctx, nil); taskErr == nil </span><span class="cov0" title="0">{
+                        task.Kill(ctx, syscall.SIGKILL)
+                        task.Delete(ctx, containerd.WithProcessKill)
+                }</span>
+                <span class="cov0" title="0">if err := ctr.Delete(ctx, containerd.WithSnapshotCleanup); err != nil &amp;&amp; !errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                        return crex.Wrap(ErrRuntime, err)
+                }</span>
+        }
+
+        <span class="cov0" title="0">if err := rt.client.ImageService().Delete(ctx, tag); err != nil &amp;&amp; !errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">slog.Debug("image destroyed", "tag", tag)
+        return nil</span>
+}
+
+// Returns a handle for an existing container.
+//
+// The container is not loaded or verified; the handle is a lightweight
+// reference that resolves the container lazily on subsequent calls.
+func (rt *Runtime) Container(id string) *Container <span class="cov0" title="0">{
+        return &amp;Container{
+                client:   rt.client,
+                id:       id,
+                platform: defaultPlatform(),
+        }
+}</span>
+</pre>
+		
+		<pre class="file" id="file12" style="display: none">package server
+
+import (
+        "context"
+        "encoding/json"
+        "log/slog"
+        "net"
+        "os"
+        "time"
+
+        "github.com/cruciblehq/cruxd/internal"
+        "github.com/cruciblehq/cruxd/internal/build"
+        "github.com/cruciblehq/spec/protocol"
+)
+
+// Handles a build command.
+//
+// Receives a recipe from crux and executes it against the container runtime.
+func (s *Server) handleBuild(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.BuildRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">result, err := build.Run(ctx, s.runtime, build.Options{
+                Recipe:     req.Recipe,
+                Resource:   req.Resource,
+                Output:     req.Output,
+                Root:       req.Root,
+                Entrypoint: req.Entrypoint,
+                Platforms:  req.Platforms,
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.mu.Lock()
+        s.builds++
+        s.mu.Unlock()
+
+        s.respond(conn, protocol.CmdOK, &amp;protocol.BuildResult{Output: result.Output})</span>
+}
+
+// Handles a status command.
+func (s *Server) handleStatus(conn net.Conn) <span class="cov0" title="0">{
+        s.mu.Lock()
+        builds := s.builds
+        s.mu.Unlock()
+
+        uptime := time.Since(s.startedAt).Truncate(time.Second)
+
+        s.respond(conn, protocol.CmdOK, &amp;protocol.StatusResult{
+                Running: true,
+                Version: internal.VersionString(),
+                Pid:     os.Getpid(),
+                Uptime:  uptime.String(),
+                Builds:  builds,
+        })
+}</span>
+
+// Handles a shutdown command.
+func (s *Server) handleShutdown(conn net.Conn) <span class="cov0" title="0">{
+        s.respond(conn, protocol.CmdOK, nil)
+        slog.Info("shutdown requested")
+
+        go func() </span><span class="cov0" title="0">{
+                s.Stop()
+        }</span>()
+}
+
+// Handles an image-import command.
+func (s *Server) handleImageImport(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.ImageImportRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">tag := protocol.ImageTag(req.Ref, req.Version)
+
+        if err := s.runtime.ImportImage(ctx, req.Path, tag); err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.respond(conn, protocol.CmdOK, nil)</span>
+}
+
+// Handles an image-start command.
+func (s *Server) handleImageStart(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.ImageStartRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">tag := protocol.ImageTag(req.Ref, req.Version)
+
+        if _, err := s.runtime.StartFromTag(ctx, tag, req.ID); err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.respond(conn, protocol.CmdOK, nil)</span>
+}
+
+// Handles an image-destroy command.
+func (s *Server) handleImageDestroy(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.ImageDestroyRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">tag := protocol.ImageTag(req.Ref, req.Version)
+
+        if err := s.runtime.DestroyImage(ctx, tag); err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.respond(conn, protocol.CmdOK, nil)</span>
+}
+
+// Handles a container-stop command.
+func (s *Server) handleContainerStop(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.ContainerStopRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">ctr := s.runtime.Container(req.ID)
+        if err := ctr.Stop(ctx); err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.respond(conn, protocol.CmdOK, nil)</span>
+}
+
+// Handles a container-destroy command.
+func (s *Server) handleContainerDestroy(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.ContainerDestroyRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">ctr := s.runtime.Container(req.ID)
+        ctr.Destroy(ctx)
+
+        s.respond(conn, protocol.CmdOK, nil)</span>
+}
+
+// Handles a container-status command.
+func (s *Server) handleContainerStatus(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.ContainerStatusRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">ctr := s.runtime.Container(req.ID)
+        status, err := ctr.Status(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.respond(conn, protocol.CmdOK, &amp;protocol.ContainerStatusResult{Status: status})</span>
+}
+
+// Handles a container-exec command.
+func (s *Server) handleContainerExec(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.ContainerExecRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">ctr := s.runtime.Container(req.ID)
+        result, err := ctr.ExecArgs(ctx, req.Command)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.respond(conn, protocol.CmdOK, &amp;protocol.ContainerExecResult{
+                ExitCode: result.ExitCode,
+                Stdout:   result.Stdout,
+                Stderr:   result.Stderr,
+        })</span>
+}
+
+// Handles a container-update command.
+func (s *Server) handleContainerUpdate(ctx context.Context, conn net.Conn, payload json.RawMessage) <span class="cov0" title="0">{
+        req, err := protocol.DecodePayload[protocol.ContainerUpdateRequest](payload)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">tag := protocol.ImageTag(req.Ref, req.Version)
+        ctr := s.runtime.Container(req.ID)
+
+        if err := ctr.Stop(ctx); err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">if err := s.runtime.ImportImage(ctx, req.Path, tag); err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">if _, err := s.runtime.StartFromTag(ctx, tag, req.ID); err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.respond(conn, protocol.CmdOK, nil)</span>
+}
+</pre>
+		
+		<pre class="file" id="file13" style="display: none">package server
+
+import (
+        "bufio"
+        "context"
+        "encoding/json"
+        "fmt"
+        "log/slog"
+        "net"
+        "os"
+        "sync"
+        "time"
+
+        "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/cruxd/internal/runtime"
+        "github.com/cruciblehq/spec/paths"
+        "github.com/cruciblehq/spec/protocol"
+)
+
+// Holds server configuration.
+type Config struct {
+        SocketPath          string // Override for the Unix socket path. Empty uses the default.
+        ContainerdAddress   string // Containerd socket address.
+        ContainerdNamespace string // Containerd namespace for images and containers.
+}
+
+// Listens on a Unix domain socket and dispatches commands.
+type Server struct {
+        socketPath string           // Path to the Unix socket file.
+        runtime    *runtime.Runtime // Containerd-backed container runtime.
+        listener   net.Listener     // Listener for incoming connections.
+        startedAt  time.Time        // Timestamp when the server started.
+        builds     int              // Total number of build commands processed.
+        done       chan struct{}    // Channel to signal server shutdown.
+        mu         sync.Mutex       // Mutex to protect shared state.
+}
+
+// Creates a new server instance.
+//
+// The socket is not opened until [Start] is called.
+func New(cfg Config) (*Server, error) <span class="cov0" title="0">{
+        socketPath := cfg.SocketPath
+        if socketPath == "" </span><span class="cov0" title="0">{
+                socketPath = paths.Socket()
+        }</span>
+
+        <span class="cov0" title="0">rt, err := runtime.New(cfg.ContainerdAddress, cfg.ContainerdNamespace)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrServer, err)
+        }</span>
+
+        <span class="cov0" title="0">return &amp;Server{
+                socketPath: socketPath,
+                runtime:    rt,
+                done:       make(chan struct{}),
+        }, nil</span>
+}
+
+// Opens the Unix socket and begins accepting connections.
+func (s *Server) Start() error <span class="cov0" title="0">{
+        socketPath := s.socketPath
+
+        if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(ErrServer, err)
+        }</span>
+
+        // Remove stale socket from a previous run.
+        <span class="cov0" title="0">os.Remove(socketPath)
+
+        listener, err := net.Listen("unix", socketPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return crex.Wrapf(ErrServer, "failed to listen on %s", socketPath)
+        }</span>
+
+        <span class="cov0" title="0">s.listener = listener
+        s.startedAt = time.Now()
+
+        if err := writePID(); err != nil </span><span class="cov0" title="0">{
+                slog.Warn("failed to write PID file", "error", err)
+        }</span>
+
+        <span class="cov0" title="0">slog.Info("server listening on socket", "path", socketPath)
+
+        go s.accept()
+        return nil</span>
+}
+
+// Shuts down the server and cleans up resources.
+func (s *Server) Stop() error <span class="cov0" title="0">{
+        close(s.done)
+
+        if s.listener != nil </span><span class="cov0" title="0">{
+                s.listener.Close()
+        }</span>
+
+        <span class="cov0" title="0">if s.runtime != nil </span><span class="cov0" title="0">{
+                s.runtime.Close()
+        }</span>
+
+        <span class="cov0" title="0">os.Remove(s.socketPath)
+        os.Remove(paths.PIDFile())
+
+        return nil</span>
+}
+
+// Blocks until the server stops.
+func (s *Server) Wait() <span class="cov0" title="0">{
+        &lt;-s.done
+}</span>
+
+// Accepts connections in a loop until the server shuts down.
+func (s *Server) accept() <span class="cov0" title="0">{
+        for </span><span class="cov0" title="0">{
+                conn, err := s.listener.Accept()
+                if err != nil </span><span class="cov0" title="0">{
+                        select </span>{
+                        case &lt;-s.done:<span class="cov0" title="0">
+                                return</span>
+                        default:<span class="cov0" title="0">
+                                slog.Error("accept error", "error", err)
+                                continue</span>
+                        }
+                }
+
+                <span class="cov0" title="0">go s.handle(conn)</span>
+        }
+}
+
+// Processes a single connection.
+//
+// Reads one newline-delimited JSON message, dispatches the command, and
+// writes the response. The connection is closed after one exchange.
+func (s *Server) handle(conn net.Conn) <span class="cov0" title="0">{
+        defer conn.Close()
+
+        reader := bufio.NewReader(conn)
+
+        line, err := reader.ReadBytes(byte(10))
+        if err != nil </span><span class="cov0" title="0">{
+                slog.Error("read error", "error", err)
+                return
+        }</span>
+
+        <span class="cov0" title="0">env, payload, err := protocol.Decode(line)
+        if err != nil </span><span class="cov0" title="0">{
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
+                return
+        }</span>
+
+        <span class="cov0" title="0">slog.Info("command received", "command", env.Command)
+
+        s.dispatch(conn, env.Command, payload)</span>
+}
+
+// Routes a command to the appropriate handler.
+func (s *Server) dispatch(conn net.Conn, cmd protocol.Command, payload json.RawMessage) <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        switch cmd </span>{
+        case protocol.CmdBuild:<span class="cov0" title="0">
+                s.handleBuild(ctx, conn, payload)</span>
+        case protocol.CmdImageImport:<span class="cov0" title="0">
+                s.handleImageImport(ctx, conn, payload)</span>
+        case protocol.CmdImageStart:<span class="cov0" title="0">
+                s.handleImageStart(ctx, conn, payload)</span>
+        case protocol.CmdImageDestroy:<span class="cov0" title="0">
+                s.handleImageDestroy(ctx, conn, payload)</span>
+        case protocol.CmdContainerStop:<span class="cov0" title="0">
+                s.handleContainerStop(ctx, conn, payload)</span>
+        case protocol.CmdContainerDestroy:<span class="cov0" title="0">
+                s.handleContainerDestroy(ctx, conn, payload)</span>
+        case protocol.CmdContainerStatus:<span class="cov0" title="0">
+                s.handleContainerStatus(ctx, conn, payload)</span>
+        case protocol.CmdContainerExec:<span class="cov0" title="0">
+                s.handleContainerExec(ctx, conn, payload)</span>
+        case protocol.CmdContainerUpdate:<span class="cov0" title="0">
+                s.handleContainerUpdate(ctx, conn, payload)</span>
+        case protocol.CmdStatus:<span class="cov0" title="0">
+                s.handleStatus(conn)</span>
+        case protocol.CmdShutdown:<span class="cov0" title="0">
+                s.handleShutdown(conn)</span>
+        default:<span class="cov0" title="0">
+                s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{
+                        Message: fmt.Sprintf("unknown command: %s", cmd),
+                })</span>
+        }
+}
+
+// Writes a JSON envelope response to the connection.
+func (s *Server) respond(conn net.Conn, cmd protocol.Command, payload any) <span class="cov0" title="0">{
+        data, err := protocol.Encode(cmd, payload)
+        if err != nil </span><span class="cov0" title="0">{
+                slog.Error("encode response failed", "error", err)
+                return
+        }</span>
+        <span class="cov0" title="0">data = append(data, byte(10))
+        conn.Write(data)</span>
+}
+
+// Writes the daemon PID to the PID file.
+func writePID() error <span class="cov0" title="0">{
+        if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">return os.WriteFile(paths.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), paths.DefaultFileMode)</span>
+}
+</pre>
+		
+		<pre class="file" id="file14" style="display: none">package internal
+
+import (
+        "fmt"
+        "runtime"
+        "strings"
+)
+
+const (
+
+        // String to indicate an undefined variable
+        defaultUndefined = "(undefined)"
+
+        // String to indicate a local (non-pipeline) build
+        defaultLocalBuild = "(local)"
+
+        // Main branch name used in version strings
+        mainBranch = "main"
+)
+
+var (
+        version   = "" // Version number (e.g., "1.2.3")
+        stage     = "" // Development stage or git branch (e.g., "staging", "main")
+        gitCommit = "" // Git commit hash (e.g., "a1b2c3d4")
+
+        rawQuiet   = "false" // Whether to enable quiet mode
+        rawDebug   = "false" // Whether to enable debug mode
+        rawVerbose = "false" // Whether to enable verbose logging
+)
+
+// Returns the current version.
+//
+// If the version is not set, returns "(undefined)". If the version includes a
+// "v" or "V" prefix (e.g., "v1.0.0"), it is stripped.
+func Version() string <span class="cov0" title="0">{
+        v := strings.TrimSpace(version)
+        if v == "" </span><span class="cov0" title="0">{
+                return defaultUndefined
+        }</span>
+
+        <span class="cov0" title="0">v = strings.ToLower(v)
+        v = strings.TrimPrefix(v, "v")
+
+        return v</span>
+}
+
+// Returns the development stage (e.g., "alpha").
+//
+// The development should correspond to the git branch name used during the
+// build. If it is not set, returns "(undefined)".
+func Stage() string <span class="cov0" title="0">{
+        s := strings.TrimSpace(stage)
+        if s == "" </span><span class="cov0" title="0">{
+                return defaultUndefined
+        }</span>
+        <span class="cov0" title="0">return strings.ToLower(s)</span>
+}
+
+// Returns the git commit hash.
+//
+// If the commit hash is not set, returns "(undefined)".
+func GitCommit() string <span class="cov0" title="0">{
+        c := strings.TrimSpace(gitCommit)
+        if c == "" </span><span class="cov0" title="0">{
+                return defaultUndefined
+        }</span>
+        <span class="cov0" title="0">return c</span>
+}
+
+// Returns the build architecture.
+func Arch() string <span class="cov0" title="0">{
+        return runtime.GOARCH
+}</span>
+
+// Returns true if this is a local (non-pipeline) build.
+//
+// A build is considered local if any of the version, git commit, or stage
+// variables are unset. Pipeline builds should set all three variables via
+// linker flags.
+func IsLocal() bool <span class="cov0" title="0">{
+        return strings.TrimSpace(version) == "" ||
+                strings.TrimSpace(gitCommit) == "" ||
+                strings.TrimSpace(stage) == ""
+}</span>
+
+// Returns a detailed version string.
+//
+// If this is a local build, returns "(local)". Otherwise, returns a string
+// formatted as "&lt;version&gt;+&lt;stage&gt; &lt;git-commit&gt; [&lt;arch&gt;]".
+func VersionString() string <span class="cov0" title="0">{
+        if IsLocal() </span><span class="cov0" title="0">{
+                return defaultLocalBuild
+        }</span>
+
+        <span class="cov0" title="0">s := Stage()
+        if s == mainBranch </span><span class="cov0" title="0">{
+                s = ""
+        }</span> else<span class="cov0" title="0"> {
+                s = "+" + s
+        }</span>
+
+        <span class="cov0" title="0">return fmt.Sprintf("%s%s %s [%s]", Version(), s, GitCommit(), Arch())</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
