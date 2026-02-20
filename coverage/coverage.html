@@ -3,7 +3,7 @@
 <html>
 	<head>
 		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-		<title>build: Go Coverage Report</title>
+		<title>cruxd: Go Coverage Report</title>
 		<style>
 			body {
 				background: black;
@@ -55,35 +55,37 @@
 			<div id="nav">
 				<select id="files">
 				
-				<option value="file0">github.com/cruciblehq/cruxd/internal/build/build.go (0.0%)</option>
+				<option value="file0">github.com/cruciblehq/cruxd/cmd/cruxd/cruxd.go (0.0%)</option>
 				
-				<option value="file1">github.com/cruciblehq/cruxd/internal/build/copy.go (16.3%)</option>
+				<option value="file1">github.com/cruciblehq/cruxd/internal/build/build.go (0.0%)</option>
 				
-				<option value="file2">github.com/cruciblehq/cruxd/internal/build/recipe.go (0.0%)</option>
+				<option value="file2">github.com/cruciblehq/cruxd/internal/build/copy.go (16.3%)</option>
 				
-				<option value="file3">github.com/cruciblehq/cruxd/internal/build/step.go (0.0%)</option>
+				<option value="file3">github.com/cruciblehq/cruxd/internal/build/recipe.go (0.0%)</option>
 				
-				<option value="file4">github.com/cruciblehq/cruxd/internal/build/stepstate.go (100.0%)</option>
+				<option value="file4">github.com/cruciblehq/cruxd/internal/build/step.go (0.0%)</option>
 				
-				<option value="file5">github.com/cruciblehq/cruxd/internal/cli/root.go (0.0%)</option>
+				<option value="file5">github.com/cruciblehq/cruxd/internal/build/stepstate.go (100.0%)</option>
 				
-				<option value="file6">github.com/cruciblehq/cruxd/internal/config.go (0.0%)</option>
+				<option value="file6">github.com/cruciblehq/cruxd/internal/cli/root.go (0.0%)</option>
 				
-				<option value="file7">github.com/cruciblehq/cruxd/internal/runtime/container.go (0.0%)</option>
+				<option value="file7">github.com/cruciblehq/cruxd/internal/config.go (0.0%)</option>
 				
-				<option value="file8">github.com/cruciblehq/cruxd/internal/runtime/copy.go (0.0%)</option>
+				<option value="file8">github.com/cruciblehq/cruxd/internal/runtime/container.go (0.0%)</option>
 				
-				<option value="file9">github.com/cruciblehq/cruxd/internal/runtime/exec.go (16.4%)</option>
+				<option value="file9">github.com/cruciblehq/cruxd/internal/runtime/copy.go (0.0%)</option>
 				
-				<option value="file10">github.com/cruciblehq/cruxd/internal/runtime/export.go (6.1%)</option>
+				<option value="file10">github.com/cruciblehq/cruxd/internal/runtime/exec.go (16.4%)</option>
 				
-				<option value="file11">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (3.0%)</option>
+				<option value="file11">github.com/cruciblehq/cruxd/internal/runtime/export.go (6.1%)</option>
 				
-				<option value="file12">github.com/cruciblehq/cruxd/internal/server/handlers.go (0.0%)</option>
+				<option value="file12">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (3.0%)</option>
 				
-				<option value="file13">github.com/cruciblehq/cruxd/internal/server/server.go (0.0%)</option>
+				<option value="file13">github.com/cruciblehq/cruxd/internal/server/handlers.go (0.0%)</option>
 				
-				<option value="file14">github.com/cruciblehq/cruxd/internal/variables.go (0.0%)</option>
+				<option value="file14">github.com/cruciblehq/cruxd/internal/server/server.go (0.0%)</option>
+				
+				<option value="file15">github.com/cruciblehq/cruxd/internal/variables.go (0.0%)</option>
 				
 				</select>
 			</div>
@@ -97,7 +99,100 @@
 		</div>
 		<div id="content">
 		
-		<pre class="file" id="file0" style="display: none">package build
+		<pre class="file" id="file0" style="display: none">package main
+
+import (
+        "context"
+        "log/slog"
+        "os"
+        "os/signal"
+        "syscall"
+
+        "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/cruxd/internal"
+        "github.com/cruciblehq/cruxd/internal/cli"
+        "github.com/cruciblehq/cruxd/internal/server"
+)
+
+// Starts the Crucible daemon.
+//
+// Initializes logging, parses flags, starts the server, and blocks until a
+// termination signal is received. The server listens on a Unix domain socket
+// for commands from the crux CLI.
+func main() <span class="cov0" title="0">{
+        slog.SetDefault(logger())
+
+        slog.Debug("build", "version", internal.VersionString())
+
+        slog.Debug("cruxd is running",
+                "pid", os.Getpid(),
+                "cwd", cwd(),
+                "args", os.Args,
+        )
+
+        cli.Execute()
+
+        ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+        defer cancel()
+
+        if err := run(ctx); err != nil </span><span class="cov0" title="0">{
+                slog.Error(err.Error())
+                os.Exit(1)
+        }</span>
+}
+
+// Runs the daemon until the context is cancelled.
+func run(ctx context.Context) error <span class="cov0" title="0">{
+        srv, err := server.New(server.Config{
+                SocketPath: cli.RootCmd.Socket,
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">if err := srv.Start(); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">slog.Info("cruxd is running")
+
+        &lt;-ctx.Done()
+
+        slog.Info("shutting down")
+        return srv.Stop()</span>
+}
+
+// Creates a buffered logger seeded from build-time linker flags.
+//
+// The logger is reconfigured after flag parsing via cli.Execute.
+func logger() *slog.Logger <span class="cov0" title="0">{
+        handler := crex.NewHandler()
+        handler.SetLevel(logLevel())
+        return slog.New(handler.WithGroup(internal.Name))
+}</span>
+
+// Returns the log level derived from build-time linker flags.
+func logLevel() slog.Level <span class="cov0" title="0">{
+        if internal.IsDebug() </span><span class="cov0" title="0">{
+                return slog.LevelDebug
+        }</span>
+        <span class="cov0" title="0">if internal.IsQuiet() </span><span class="cov0" title="0">{
+                return slog.LevelWarn
+        }</span>
+        <span class="cov0" title="0">return slog.LevelInfo</span>
+}
+
+// Returns the current working directory or "(unknown)".
+func cwd() string <span class="cov0" title="0">{
+        cwd, err := os.Getwd()
+        if err != nil </span><span class="cov0" title="0">{
+                return "(unknown)"
+        }</span>
+        <span class="cov0" title="0">return cwd</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package build
 
 import (
         "context"
@@ -151,7 +246,7 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts Options) (*Result, error
 }
 </pre>
 		
-		<pre class="file" id="file1" style="display: none">package build
+		<pre class="file" id="file2" style="display: none">package build
 
 import (
         "archive/tar"
@@ -377,7 +472,7 @@ func writeTarEntry(tw *tar.Writer, hostPath, archivePath string, d os.DirEntry) 
 }
 </pre>
 		
-		<pre class="file" id="file2" style="display: none">package build
+		<pre class="file" id="file3" style="display: none">package build
 
 import (
         "context"
@@ -545,7 +640,7 @@ func stageLabel(name string, index int) string <span class="cov0" title="0">{
 }
 </pre>
 		
-		<pre class="file" id="file3" style="display: none">package build
+		<pre class="file" id="file4" style="display: none">package build
 
 import (
         "context"
@@ -621,7 +716,7 @@ func executeOperation(ctx context.Context, ctr *runtime.Container, step manifest
 }
 </pre>
 		
-		<pre class="file" id="file4" style="display: none">package build
+		<pre class="file" id="file5" style="display: none">package build
 
 import (
         "maps"
@@ -700,7 +795,7 @@ func (s *stepState) environ() []string <span class="cov8" title="1">{
 }
 </pre>
 		
-		<pre class="file" id="file5" style="display: none">package cli
+		<pre class="file" id="file6" style="display: none">package cli
 
 import (
         "log/slog"
@@ -774,7 +869,7 @@ func isatty(f *os.File) bool <span class="cov0" title="0">{
 }
 </pre>
 		
-		<pre class="file" id="file6" style="display: none">package internal
+		<pre class="file" id="file7" style="display: none">package internal
 
 import (
         "strconv"
@@ -834,7 +929,7 @@ func IsVerbose() bool <span class="cov0" title="0">{
 }</span>
 </pre>
 		
-		<pre class="file" id="file7" style="display: none">package runtime
+		<pre class="file" id="file8" style="display: none">package runtime
 
 import (
         "context"
@@ -991,7 +1086,7 @@ func (c *Container) remove(ctx context.Context) <span class="cov0" title="0">{
 }
 </pre>
 		
-		<pre class="file" id="file8" style="display: none">package runtime
+		<pre class="file" id="file9" style="display: none">package runtime
 
 import (
         "context"
@@ -1036,7 +1131,7 @@ func (c *Container) mustExec(ctx context.Context, desc string, stdin io.Reader, 
 }
 </pre>
 		
-		<pre class="file" id="file9" style="display: none">package runtime
+		<pre class="file" id="file10" style="display: none">package runtime
 
 import (
         "bytes"
@@ -1235,7 +1330,7 @@ func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin
 }
 </pre>
 		
-		<pre class="file" id="file10" style="display: none">package runtime
+		<pre class="file" id="file11" style="display: none">package runtime
 
 import (
         "bytes"
@@ -1432,7 +1527,7 @@ func manifestGCLabels(m ocispec.Manifest) map[string]string <span class="cov8" t
 }
 </pre>
 		
-		<pre class="file" id="file11" style="display: none">package runtime
+		<pre class="file" id="file12" style="display: none">package runtime
 
 import (
         "context"
@@ -1739,7 +1834,7 @@ func (rt *Runtime) Container(id string) *Container <span class="cov0" title="0">
 }</span>
 </pre>
 		
-		<pre class="file" id="file12" style="display: none">package server
+		<pre class="file" id="file13" style="display: none">package server
 
 import (
         "context"
@@ -1966,7 +2061,7 @@ func (s *Server) handleContainerUpdate(ctx context.Context, conn net.Conn, paylo
 }
 </pre>
 		
-		<pre class="file" id="file13" style="display: none">package server
+		<pre class="file" id="file14" style="display: none">package server
 
 import (
         "bufio"
@@ -2174,7 +2269,7 @@ func writePID() error <span class="cov0" title="0">{
 }
 </pre>
 		
-		<pre class="file" id="file14" style="display: none">package internal
+		<pre class="file" id="file15" style="display: none">package internal
 
 import (
         "fmt"
