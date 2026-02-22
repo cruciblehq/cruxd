@@ -1,0 +1,93 @@
+name: Publish
+
+on:
+    release:
+        types: [published]
+
+jobs:
+    homebrew:
+        name: Update Homebrew Formula
+        runs-on: ubuntu-latest
+        if: "!github.event.release.prerelease"
+        steps:
+            - name: Get release info
+              id: release
+              run: |
+                  TAG="${{ github.event.release.tag_name }}"
+                  VERSION="${TAG#v}"
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+            - name: Download release assets
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  TAG="${{ steps.release.outputs.tag }}"
+                  gh release download "$TAG" \
+                    --repo "$GITHUB_REPOSITORY" \
+                    --pattern "cruxd-linux-*.tar.gz"
+
+            - name: Compute checksums
+              id: checksums
+              run: |
+                  echo "sha256_amd64=$(sha256sum cruxd-linux-amd64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+                  echo "sha256_arm64=$(sha256sum cruxd-linux-arm64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+            - name: Update Homebrew formula
+              env:
+                  TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+              run: |
+                  VERSION="${{ steps.release.outputs.version }}"
+                  TAG="${{ steps.release.outputs.tag }}"
+                  SHA256_AMD64="${{ steps.checksums.outputs.sha256_amd64 }}"
+                  SHA256_ARM64="${{ steps.checksums.outputs.sha256_arm64 }}"
+                  BASE_URL="https://github.com/cruciblehq/cruxd/releases/download/${TAG}"
+
+                  cat > cruxd.rb << 'FORMULA'
+                  class Cruxd < Formula
+                    desc "cruxd is a container runtime for testing and fuzzing containerized applications."
+                    homepage "https://github.com/cruciblehq/cruxd"
+                    version "VERSION_PLACEHOLDER"
+
+                    on_linux do
+                      if Hardware::CPU.intel?
+                        url "BASE_URL_PLACEHOLDER/cruxd-linux-amd64.tar.gz"
+                        sha256 "SHA256_AMD64_PLACEHOLDER"
+                      elsif Hardware::CPU.arm?
+                        url "BASE_URL_PLACEHOLDER/cruxd-linux-arm64.tar.gz"
+                        sha256 "SHA256_ARM64_PLACEHOLDER"
+                      end
+                    end
+
+                    def install
+                      bin.install "cruxd"
+                    end
+
+                    test do
+                      assert_match version.to_s, shell_output("#{bin}/cruxd version")
+                    end
+                  end
+                  FORMULA
+
+                  sed -i "s|VERSION_PLACEHOLDER|${VERSION}|g" cruxd.rb
+                  sed -i "s|BASE_URL_PLACEHOLDER|${BASE_URL}|g" cruxd.rb
+                  sed -i "s|SHA256_AMD64_PLACEHOLDER|${SHA256_AMD64}|g" cruxd.rb
+                  sed -i "s|SHA256_ARM64_PLACEHOLDER|${SHA256_ARM64}|g" cruxd.rb
+
+                  # Remove leading whitespace from heredoc
+                  sed -i 's/^          //' cruxd.rb
+
+                  echo "Generated formula:"
+                  cat cruxd.rb
+
+                  # Clone tap repo and push updated formula
+                  git clone "https://x-access-token:${TAP_TOKEN}@github.com/cruciblehq/homebrew-tap.git" tap
+                  mkdir -p tap/Formula
+                  cp cruxd.rb tap/Formula/cruxd.rb
+
+                  cd tap
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add Formula/cruxd.rb
+                  git commit -m "cruxd ${VERSION}"
+                  git push
