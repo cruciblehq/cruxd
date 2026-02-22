@@ -33,9 +33,18 @@ jobs:
                   echo "sha256_amd64=$(sha256sum cruxd-linux-amd64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
                   echo "sha256_arm64=$(sha256sum cruxd-linux-arm64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
+            - name: Generate GitHub App token
+              id: app-token
+              uses: actions/create-github-app-token@v2
+              with:
+                  app-id: ${{ secrets.APP_ID }}
+                  private-key: ${{ secrets.APP_PRIVATE_KEY }}
+                  owner: cruciblehq
+                  repositories: homebrew-tap
+
             - name: Update Homebrew formula
               env:
-                  TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+                  TAP_TOKEN: ${{ steps.app-token.outputs.token }}
               run: |
                   VERSION="${{ steps.release.outputs.version }}"
                   TAG="${{ steps.release.outputs.tag }}"
