@@ -54,15 +54,16 @@ jobs:
 
                   cat > cruxd.rb << 'FORMULA'
                   class Cruxd < Formula
-                    desc "cruxd is a container runtime for testing and fuzzing containerized applications."
+                    desc "The Crucible daemon."
                     homepage "https://github.com/cruciblehq/cruxd"
                     version "VERSION_PLACEHOLDER"
+                    url "BASE_URL_PLACEHOLDER/cruxd-linux-amd64.tar.gz"
+                    sha256 "SHA256_AMD64_PLACEHOLDER"
+
+                    depends_on :linux
 
                     on_linux do
-                      if Hardware::CPU.intel?
-                        url "BASE_URL_PLACEHOLDER/cruxd-linux-amd64.tar.gz"
-                        sha256 "SHA256_AMD64_PLACEHOLDER"
-                      elsif Hardware::CPU.arm?
+                      on_arm do
                         url "BASE_URL_PLACEHOLDER/cruxd-linux-arm64.tar.gz"
                         sha256 "SHA256_ARM64_PLACEHOLDER"
                       end
