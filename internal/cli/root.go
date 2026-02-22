@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/alecthomas/kong"
 	"github.com/cruciblehq/crex"
@@ -11,25 +14,33 @@ import (
 
 // Represents the root command for the cruxd daemon.
 var RootCmd struct {
-	Quiet   bool   `short:"q" help:"Suppress informational output."`
-	Verbose bool   `short:"v" help:"Enable verbose output."`
-	Debug   bool   `short:"d" help:"Enable debug output."`
-	Socket  string `short:"s" help:"Override the default Unix socket path." placeholder:"PATH"`
+	Quiet   bool       `short:"q" help:"Suppress informational output."`
+	Verbose bool       `short:"v" help:"Enable verbose output."`
+	Debug   bool       `short:"d" help:"Enable debug output."`
+	Socket  string     `short:"s" help:"Override the default Unix socket path." placeholder:"PATH"`
+	Start   StartCmd   `cmd:"" help:"Start the daemon."`
+	Version VersionCmd `cmd:"" help:"Show version information."`
 }
 
-// Parses arguments and configures logging.
-func Execute() {
+// Parses arguments, configures logging, and runs the selected subcommand.
+func Execute() error {
 
-	kong.Parse(&RootCmd,
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	kongCtx := kong.Parse(&RootCmd,
 		kong.Name(internal.Name),
 		kong.Description("The Crucible daemon.\n\nListens on a Unix domain socket for commands from the crux CLI."),
 		kong.UsageOnError(),
 		kong.Vars{
 			"version": internal.VersionString(),
 		},
+		kong.BindTo(ctx, (*context.Context)(nil)),
 	)
 
 	configureLogger()
+
+	return kongCtx.Run()
 }
 
 // Configures the global logger based on CLI flags.

@@ -1,23 +1,18 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/cruciblehq/crex"
 	"github.com/cruciblehq/cruxd/internal"
 	"github.com/cruciblehq/cruxd/internal/cli"
-	"github.com/cruciblehq/cruxd/internal/server"
 )
 
-// Starts the Crucible daemon.
+// The entry point for the cruxd daemon.
 //
-// Initializes logging, parses flags, starts the server, and blocks until a
-// termination signal is received. The server listens on a Unix domain socket
-// for commands from the crux CLI.
+// Initializes logging, displays startup information, and executes the root
+// command. If any error occurs during execution, it exits with a non-zero code.
 func main() {
 	slog.SetDefault(logger())
 
@@ -29,36 +24,10 @@ func main() {
 		"args", os.Args,
 	)
 
-	cli.Execute()
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	if err := run(ctx); err != nil {
+	if err := cli.Execute(); err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
 	}
-}
-
-// Runs the daemon until the context is cancelled.
-func run(ctx context.Context) error {
-	srv, err := server.New(server.Config{
-		SocketPath: cli.RootCmd.Socket,
-	})
-	if err != nil {
-		return err
-	}
-
-	if err := srv.Start(); err != nil {
-		return err
-	}
-
-	slog.Info("cruxd is running")
-
-	<-ctx.Done()
-
-	slog.Info("shutting down")
-	return srv.Stop()
 }
 
 // Creates a buffered logger seeded from build-time linker flags.
