@@ -27,7 +27,6 @@
                 "preset": "conventionalcommits"
             }
         ],
-        "@semantic-release/changelog",
         [
             "@semantic-release/exec",
             {
@@ -40,15 +39,6 @@
                 "draftRelease": true,
                 "successCommentCondition": false,
                 "labels": false
-            }
-        ],
-        [
-            "@semantic-release/git",
-            {
-                "assets": [
-                    "CHANGELOG.md"
-                ],
-                "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
             }
         ]
     ]
