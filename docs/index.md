@@ -1345,6 +1345,7 @@ srv.Wait()
 
 ## Index
 
+- [Constants](<#constants>)
 - [Variables](<#variables>)
 - [func writePID\(\) error](<#writePID>)
 - [type Config](<#Config>)
@@ -1369,6 +1370,21 @@ srv.Wait()
   - [func \(s \*Server\) handleStatus\(conn net.Conn\)](<#Server.handleStatus>)
   - [func \(s \*Server\) respond\(conn net.Conn, cmd protocol.Command, payload any\)](<#Server.respond>)
 
+
+## Constants
+
+<a name="DefaultContainerdAddress"></a>
+
+```go
+const (
+
+    // Default containerd socket address.
+    DefaultContainerdAddress = "/run/containerd/containerd.sock"
+
+    // Default containerd namespace for images and containers.
+    DefaultContainerdNamespace = "crux"
+)
+```
 
 ## Variables
 
@@ -1397,8 +1413,8 @@ Holds server configuration.
 ```go
 type Config struct {
     SocketPath          string // Override for the Unix socket path. Empty uses the default.
-    ContainerdAddress   string // Containerd socket address.
-    ContainerdNamespace string // Containerd namespace for images and containers.
+    ContainerdAddress   string // Containerd socket address. Empty uses [DefaultContainerdAddress].
+    ContainerdNamespace string // Containerd namespace for images and containers. Empty uses [DefaultContainerdNamespace].
 }
 ```
 

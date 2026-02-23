@@ -2120,11 +2120,20 @@ import (
         "github.com/cruciblehq/spec/protocol"
 )
 
+const (
+
+        // Default containerd socket address.
+        DefaultContainerdAddress = "/run/containerd/containerd.sock"
+
+        // Default containerd namespace for images and containers.
+        DefaultContainerdNamespace = "crux"
+)
+
 // Holds server configuration.
 type Config struct {
         SocketPath          string // Override for the Unix socket path. Empty uses the default.
-        ContainerdAddress   string // Containerd socket address.
-        ContainerdNamespace string // Containerd namespace for images and containers.
+        ContainerdAddress   string // Containerd socket address. Empty uses [DefaultContainerdAddress].
+        ContainerdNamespace string // Containerd namespace for images and containers. Empty uses [DefaultContainerdNamespace].
 }
 
 // Listens on a Unix domain socket and dispatches commands.
@@ -2147,7 +2156,17 @@ func New(cfg Config) (*Server, error) <span class="cov0" title="0">{
                 socketPath = paths.Socket()
         }</span>
 
-        <span class="cov0" title="0">rt, err := runtime.New(cfg.ContainerdAddress, cfg.ContainerdNamespace)
+        <span class="cov0" title="0">containerdAddress := cfg.ContainerdAddress
+        if containerdAddress == "" </span><span class="cov0" title="0">{
+                containerdAddress = DefaultContainerdAddress
+        }</span>
+
+        <span class="cov0" title="0">containerdNamespace := cfg.ContainerdNamespace
+        if containerdNamespace == "" </span><span class="cov0" title="0">{
+                containerdNamespace = DefaultContainerdNamespace
+        }</span>
+
+        <span class="cov0" title="0">rt, err := runtime.New(containerdAddress, containerdNamespace)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, crex.Wrap(ErrServer, err)
         }</span>
