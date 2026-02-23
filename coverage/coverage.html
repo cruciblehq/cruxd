@@ -2111,6 +2111,8 @@ import (
         "log/slog"
         "net"
         "os"
+        "os/user"
+        "strconv"
         "sync"
         "time"
 
@@ -2125,8 +2127,16 @@ const (
         // Default containerd socket address.
         DefaultContainerdAddress = "/run/containerd/containerd.sock"
 
-        // Default containerd namespace for images and containers.
+        // Default container d namespace for images and containers.
         DefaultContainerdNamespace = "crux"
+
+        // Group name used to grant socket access. Members of this group can
+        // connect to the daemon socket without owning the process.
+        socketGroup = "cruxd"
+
+        // File mode applied to the Unix socket. Owner and group get read-write
+        // (required for connect); others get no access.
+        socketMode = 0660
 )
 
 // Holds server configuration.
@@ -2180,18 +2190,9 @@ func New(cfg Config) (*Server, error) <span class="cov0" title="0">{
 
 // Opens the Unix socket and begins accepting connections.
 func (s *Server) Start() error <span class="cov0" title="0">{
-        socketPath := s.socketPath
-
-        if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil </span><span class="cov0" title="0">{
-                return crex.Wrap(ErrServer, err)
-        }</span>
-
-        // Remove stale socket from a previous run.
-        <span class="cov0" title="0">os.Remove(socketPath)
-
-        listener, err := net.Listen("unix", socketPath)
+        listener, err := listen(s.socketPath)
         if err != nil </span><span class="cov0" title="0">{
-                return crex.Wrapf(ErrServer, "failed to listen on %s", socketPath)
+                return err
         }</span>
 
         <span class="cov0" title="0">s.listener = listener
@@ -2201,10 +2202,52 @@ func (s *Server) Start() error <span class="cov0" title="0">{
                 slog.Warn("failed to write PID file", "error", err)
         }</span>
 
-        <span class="cov0" title="0">slog.Info("server listening on socket", "path", socketPath)
+        <span class="cov0" title="0">slog.Info("server listening on socket", "path", s.socketPath)
 
         go s.accept()
         return nil</span>
+}
+
+// Creates the Unix socket listener, removes any stale socket from a previous
+// run, and applies permissions.
+func listen(socketPath string) (net.Listener, error) <span class="cov0" title="0">{
+        if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrServer, err)
+        }</span>
+
+        <span class="cov0" title="0">os.Remove(socketPath)
+
+        listener, err := net.Listen("unix", socketPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrapf(ErrServer, "failed to listen on %s", socketPath)
+        }</span>
+
+        <span class="cov0" title="0">if err := setSocketPermissions(socketPath); err != nil </span><span class="cov0" title="0">{
+                listener.Close()
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">return listener, nil</span>
+}
+
+// Restricts socket access to owner and group. The daemon does not run as
+// root; any user in the cruxd group can also connect.
+func setSocketPermissions(socketPath string) error <span class="cov0" title="0">{
+        if err := os.Chmod(socketPath, socketMode); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrapf(ErrServer, "failed to chmod socket %s", socketPath)
+        }</span>
+
+        <span class="cov0" title="0">if g, err := user.LookupGroup(socketGroup); err == nil </span><span class="cov0" title="0">{
+                if gid, err := strconv.Atoi(g.Gid); err == nil </span><span class="cov0" title="0">{
+                        if err := os.Chown(socketPath, -1, gid); err != nil </span><span class="cov0" title="0">{
+                                slog.Warn("failed to chgrp socket", "group", socketGroup, "error", err)
+                        }</span>
+                }
+        } else<span class="cov0" title="0"> {
+                slog.Warn("socket group not found, socket accessible to owner only", "group", socketGroup)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
 }
 
 // Shuts down the server and cleans up resources.

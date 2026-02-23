@@ -1347,6 +1347,8 @@ srv.Wait()
 
 - [Constants](<#constants>)
 - [Variables](<#variables>)
+- [func listen\(socketPath string\) \(net.Listener, error\)](<#listen>)
+- [func setSocketPermissions\(socketPath string\) error](<#setSocketPermissions>)
 - [func writePID\(\) error](<#writePID>)
 - [type Config](<#Config>)
 - [type Server](<#Server>)
@@ -1381,8 +1383,16 @@ const (
     // Default containerd socket address.
     DefaultContainerdAddress = "/run/containerd/containerd.sock"
 
-    // Default containerd namespace for images and containers.
+    // Default container d namespace for images and containers.
     DefaultContainerdNamespace = "crux"
+
+    // Group name used to grant socket access. Members of this group can
+    // connect to the daemon socket without owning the process.
+    socketGroup = "cruxd"
+
+    // File mode applied to the Unix socket. Owner and group get read-write
+    // (required for connect); others get no access.
+    socketMode = 0660
 )
 ```
 
@@ -1395,6 +1405,24 @@ var (
     ErrServer = errors.New("server error")
 )
 ```
+
+<a name="listen"></a>
+## func listen
+
+```go
+func listen(socketPath string) (net.Listener, error)
+```
+
+Creates the Unix socket listener, removes any stale socket from a previous run, and applies permissions.
+
+<a name="setSocketPermissions"></a>
+## func setSocketPermissions
+
+```go
+func setSocketPermissions(socketPath string) error
+```
+
+Restricts socket access to owner and group. The daemon does not run as root; any user in the cruxd group can also connect.
 
 <a name="writePID"></a>
 ## func writePID
