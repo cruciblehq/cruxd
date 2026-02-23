@@ -41,8 +41,8 @@ github.com/containerd/typeurl/v2 v2.2.3 h1:yNA/94zxWdvYACdYO8zofhrTVuQY73fFU1y++
 github.com/containerd/typeurl/v2 v2.2.3/go.mod h1:95ljDnPfD3bAbDJRugOiShd/DlAAsxGtUBhJxIn7SCk=
 github.com/cruciblehq/crex v0.1.0 h1:Bq9pIvPgHSeLnrjb0TXQj6M4NohG7pBxqAUUBYJ44AY=
 github.com/cruciblehq/crex v0.1.0/go.mod h1:VmOpgQ0YCOmOxAMOMUHJg1R1wjwrtvrmumKhPuMS4hE=
-github.com/cruciblehq/spec v0.1.0 h1:pitHqUPk5b9UmLvuFE8FQpdUCmO916zEeQQk5QrKEGI=
-github.com/cruciblehq/spec v0.1.0/go.mod h1:3Kt8sXxAFVh4nJeI5VAj+nfjNUNTFCSP6VnZO6LJBCA=
+github.com/cruciblehq/spec v0.1.1 h1:oTzwZnZ1lkBvXSnl8Nwn3ScTU33vZY5ZWMxs4XNcNLo=
+github.com/cruciblehq/spec v0.1.1/go.mod h1:3Kt8sXxAFVh4nJeI5VAj+nfjNUNTFCSP6VnZO6LJBCA=
 github.com/cyphar/filepath-securejoin v0.5.1 h1:eYgfMq5yryL4fbWfkLpFFy2ukSELzaJOTaUTuh+oF48=
 github.com/cyphar/filepath-securejoin v0.5.1/go.mod h1:Sdj7gXlvMcPZsbhwhQ33GguGLDGQL7h7bg04C/+u9jI=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
