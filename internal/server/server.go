@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/user"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,8 +24,16 @@ const (
 	// Default containerd socket address.
 	DefaultContainerdAddress = "/run/containerd/containerd.sock"
 
-	// Default containerd namespace for images and containers.
+	// Default container d namespace for images and containers.
 	DefaultContainerdNamespace = "crux"
+
+	// Group name used to grant socket access. Members of this group can
+	// connect to the daemon socket without owning the process.
+	socketGroup = "cruxd"
+
+	// File mode applied to the Unix socket. Owner and group get read-write
+	// (required for connect); others get no access.
+	socketMode = 0660
 )
 
 // Holds server configuration.
@@ -77,18 +87,9 @@ func New(cfg Config) (*Server, error) {
 
 // Opens the Unix socket and begins accepting connections.
 func (s *Server) Start() error {
-	socketPath := s.socketPath
-
-	if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil {
-		return crex.Wrap(ErrServer, err)
-	}
-
-	// Remove stale socket from a previous run.
-	os.Remove(socketPath)
-
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := listen(s.socketPath)
 	if err != nil {
-		return crex.Wrapf(ErrServer, "failed to listen on %s", socketPath)
+		return err
 	}
 
 	s.listener = listener
@@ -98,9 +99,51 @@ func (s *Server) Start() error {
 		slog.Warn("failed to write PID file", "error", err)
 	}
 
-	slog.Info("server listening on socket", "path", socketPath)
+	slog.Info("server listening on socket", "path", s.socketPath)
 
 	go s.accept()
+	return nil
+}
+
+// Creates the Unix socket listener, removes any stale socket from a previous
+// run, and applies permissions.
+func listen(socketPath string) (net.Listener, error) {
+	if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil {
+		return nil, crex.Wrap(ErrServer, err)
+	}
+
+	os.Remove(socketPath)
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, crex.Wrapf(ErrServer, "failed to listen on %s", socketPath)
+	}
+
+	if err := setSocketPermissions(socketPath); err != nil {
+		listener.Close()
+		return nil, err
+	}
+
+	return listener, nil
+}
+
+// Restricts socket access to owner and group. The daemon does not run as
+// root; any user in the cruxd group can also connect.
+func setSocketPermissions(socketPath string) error {
+	if err := os.Chmod(socketPath, socketMode); err != nil {
+		return crex.Wrapf(ErrServer, "failed to chmod socket %s", socketPath)
+	}
+
+	if g, err := user.LookupGroup(socketGroup); err == nil {
+		if gid, err := strconv.Atoi(g.Gid); err == nil {
+			if err := os.Chown(socketPath, -1, gid); err != nil {
+				slog.Warn("failed to chgrp socket", "group", socketGroup, "error", err)
+			}
+		}
+	} else {
+		slog.Warn("socket group not found, socket accessible to owner only", "group", socketGroup)
+	}
+
 	return nil
 }
 
