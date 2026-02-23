@@ -857,8 +857,10 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
 ```go
 const (
 
-    // Snapshotter used for container filesystems.
-    snapshotter = "overlayfs"
+    // Snapshotter used for container filesystems. fuse-overlayfs provides
+    // overlay semantics without requiring root privileges (no mount(2)),
+    // allowing cruxd to run as a regular user.
+    snapshotter = "fuse-overlayfs"
 
     // OCI runtime shim for running containers.
     ociRuntime = "io.containerd.runc.v2"
