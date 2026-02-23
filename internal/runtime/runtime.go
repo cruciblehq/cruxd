@@ -11,7 +11,8 @@ import (
 	"syscall"
 
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/transfer/archive"
+	timage "github.com/containerd/containerd/v2/core/transfer/image"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/cruciblehq/crex"
@@ -53,27 +54,18 @@ func (rt *Runtime) Close() error {
 // Imports an OCI archive, unpacks it for the target platform, and starts
 // a container.
 //
-// The archive is imported into containerd's content store and tagged with
-// a deterministic name derived from the path. The layers for the target
-// platform are unpacked into the snapshotter, a container is created with
-// a fresh snapshot, and a long-running task (sleep infinity) is started so
-// that subsequent Exec calls have a running process to attach to. Any existing
-// container with the same ID is removed before the new one is created.
-// Building for a platform other than the host requires QEMU / binfmt_misc
-// support in the kernel.
+// The archive is transferred server-side into containerd's content store,
+// tagged with a deterministic name derived from the path, and the layers
+// for the target platform are unpacked into the snapshotter. A container
+// is created with a fresh snapshot and a long-running task (sleep infinity)
+// is started so that subsequent Exec calls have a running process to attach
+// to. Any existing container with the same ID is removed before the new one
+// is created. Building for a platform other than the host requires
+// QEMU / binfmt_misc support in the kernel.
 func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, platform string) (*Container, error) {
 	tag := imageTag(path)
 
-	source, err := rt.importArchive(ctx, path)
-	if err != nil {
-		return nil, crex.Wrap(ErrRuntime, err)
-	}
-
-	if err := rt.tagImage(ctx, source, tag); err != nil {
-		return nil, crex.Wrap(ErrRuntime, err)
-	}
-
-	if err := rt.unpackImage(ctx, tag, platform); err != nil {
+	if err := rt.transferImage(ctx, path, tag, platform); err != nil {
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
@@ -106,72 +98,28 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
 	return c, nil
 }
 
-// Imports an OCI archive into the content store.
+// Transfers an OCI archive into containerd's content store server-side.
 //
-// The archive must contain exactly one image. Multi-platform archives
-// are supported (single OCI index with per-platform manifests).
-func (rt *Runtime) importArchive(ctx context.Context, path string) (images.Image, error) {
+// The archive is streamed to containerd which imports it, stores it under
+// the given tag, and unpacks the layers for the target platform into the
+// snapshotter. The entire operation runs inside the containerd process,
+// so cruxd does not need mount privileges.
+func (rt *Runtime) transferImage(ctx context.Context, path, tag, platform string) error {
 	fh, err := os.Open(path)
 	if err != nil {
-		return images.Image{}, err
+		return err
 	}
 	defer fh.Close()
 
-	imported, err := rt.client.Import(ctx, fh)
-	if err != nil {
-		return images.Image{}, err
-	}
-
-	// Import returns one record per image in the archive's index.json.
-	// A multi-platform archive has a single entry (an OCI index that
-	// internally references per-platform manifests); platform selection
-	// happens later via platformImage. Multiple records would mean
-	// multiple unrelated images, which we don't support.
-	if len(imported) == 0 {
-		return images.Image{}, ErrEmptyArchive
-	} else if len(imported) > 1 {
-		return images.Image{}, ErrMultipleImages
-	}
-
-	return imported[0], nil
-}
-
-// Tags an imported image under a deterministic name.
-//
-// Updates the tag if it already exists. Removes the source record when
-// its name differs from the tag to avoid duplicates.
-func (rt *Runtime) tagImage(ctx context.Context, source images.Image, tag string) error {
-	is := rt.client.ImageService()
-
-	img := images.Image{
-		Name:   tag,
-		Target: source.Target,
-	}
-
-	if _, err := is.Create(ctx, img); err != nil {
-		if !errdefs.IsAlreadyExists(err) {
-			return err
-		}
-		if _, err := is.Update(ctx, img, "target"); err != nil {
-			return err
-		}
-	}
-
-	if source.Name != tag {
-		_ = is.Delete(ctx, source.Name)
-	}
-
-	return nil
-}
-
-// Unpacks the image layers for the target platform into the snapshotter.
-func (rt *Runtime) unpackImage(ctx context.Context, tag, platform string) error {
-	image, err := rt.resolveImage(ctx, tag, platform)
+	p, err := platforms.Parse(platform)
 	if err != nil {
 		return err
 	}
 
-	return image.Unpack(ctx, snapshotter)
+	src := archive.NewImageImportStream(fh, "")
+	dest := timage.NewStore(tag, timage.WithUnpack(p, snapshotter))
+
+	return rt.client.Transfer(ctx, src, dest)
 }
 
 // Looks up a tagged image and selects the manifest for the given platform.
@@ -210,20 +158,12 @@ func defaultPlatform() string {
 // Imports an OCI archive, tags it under the given name, and unpacks it for
 // the host platform.
 //
-// The archive is imported into the content store, tagged with the provided
-// name, and the layers are unpacked into the snapshotter.
+// The archive is transferred server-side into containerd's content store,
+// tagged with the provided name, and the layers are unpacked into the
+// snapshotter.
 func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error {
-	source, err := rt.importArchive(ctx, path)
-	if err != nil {
-		return crex.Wrap(ErrRuntime, err)
-	}
-
-	if err := rt.tagImage(ctx, source, tag); err != nil {
-		return crex.Wrap(ErrRuntime, err)
-	}
-
 	platform := defaultPlatform()
-	if err := rt.unpackImage(ctx, tag, platform); err != nil {
+	if err := rt.transferImage(ctx, path, tag, platform); err != nil {
 		return crex.Wrap(ErrRuntime, err)
 	}
 
