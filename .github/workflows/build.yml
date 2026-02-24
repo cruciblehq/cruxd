@@ -27,7 +27,7 @@ jobs:
           node-version: 24
 
       - name: Verify Go modules
-        uses: cruciblehq/.github/actions/verify-go-modules@main
+        uses: cruciblehq/.github/actions/go-verify-modules@main
 
       - name: Run Go tests and coverage
         uses: cruciblehq/.github/actions/go-test-coverage@main
