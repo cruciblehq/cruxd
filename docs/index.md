@@ -316,7 +316,10 @@ if err != nil {
   - [func \(r \*recipe\) buildStage\(ctx context.Context, stage manifest.Stage, index int, platform, output string, stages map\[string\]\*runtime.Container\) error](<#recipe.buildStage>)
   - [func \(r \*recipe\) containerID\(name string, index int, platform string\) string](<#recipe.containerID>)
   - [func \(r \*recipe\) destroyContainers\(ctx context.Context\)](<#recipe.destroyContainers>)
+  - [func \(r \*recipe\) exportStage\(ctx context.Context, ctr \*runtime.Container, output string\) error](<#recipe.exportStage>)
   - [func \(r \*recipe\) platformOutput\(platform string\) string](<#recipe.platformOutput>)
+  - [func \(r \*recipe\) resolveImageSource\(stage manifest.Stage\) \(string, error\)](<#recipe.resolveImageSource>)
+  - [func \(r \*recipe\) startStageContainer\(ctx context.Context, stage manifest.Stage, index int, platform string\) \(\*runtime.Container, error\)](<#recipe.startStageContainer>)
 - [type stepState](<#stepState>)
   - [func newStepState\(\) \*stepState](<#newStepState>)
   - [func \(s \*stepState\) apply\(step manifest.Step\)](<#stepState.apply>)
@@ -591,6 +594,15 @@ func (r *recipe) destroyContainers(ctx context.Context)
 
 Destroys all stage containers.
 
+<a name="recipe.exportStage"></a>
+### func \(\*recipe\) exportStage
+
+```go
+func (r *recipe) exportStage(ctx context.Context, ctr *runtime.Container, output string) error
+```
+
+Stops the container and exports it as the final image.
+
 <a name="recipe.platformOutput"></a>
 ### func \(\*recipe\) platformOutput
 
@@ -601,6 +613,26 @@ func (r *recipe) platformOutput(platform string) string
 Returns the output directory for a specific platform.
 
 When building for a single platform, the output directory is left as\-is to preserve the existing \{output\}/image.tar convention. For multi\-platform builds, each platform gets a subdirectory \(e.g., \{output\}/linux\-amd64\).
+
+<a name="recipe.resolveImageSource"></a>
+### func \(\*recipe\) resolveImageSource
+
+```go
+func (r *recipe) resolveImageSource(stage manifest.Stage) (string, error)
+```
+
+Resolves the stage's base image source to an absolute path or reference string.
+
+For file sources, relative paths are resolved against the build context directory. Reference sources are returned as\-is.
+
+<a name="recipe.startStageContainer"></a>
+### func \(\*recipe\) startStageContainer
+
+```go
+func (r *recipe) startStageContainer(ctx context.Context, stage manifest.Stage, index int, platform string) (*runtime.Container, error)
+```
+
+Resolves the base image source and starts the stage container.
 
 <a name="stepState"></a>
 ## type stepState

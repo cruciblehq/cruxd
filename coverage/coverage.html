@@ -535,15 +535,9 @@ func (r *recipe) buildStage(ctx context.Context, stage manifest.Stage, index int
         label := stageLabel(stage.Name, index)
         slog.Info(fmt.Sprintf("building stage %s", label), "platform", platform)
 
-        src, err := stage.ParseFrom()
+        ctr, err := r.startStageContainer(ctx, stage, index, platform)
         if err != nil </span><span class="cov0" title="0">{
                 return err
-        }</span>
-
-        <span class="cov0" title="0">id := r.containerID(stage.Name, index, platform)
-        ctr, err := r.rt.StartContainer(ctx, src.Value, id, platform)
-        if err != nil </span><span class="cov0" title="0">{
-                return crex.Wrap(runtime.ErrRuntime, err)
         }</span>
 
         <span class="cov0" title="0">r.containers = append(r.containers, ctr)
@@ -556,14 +550,54 @@ func (r *recipe) buildStage(ctx context.Context, stage manifest.Stage, index int
         }</span>
 
         <span class="cov0" title="0">if !stage.Transient </span><span class="cov0" title="0">{
-                if err := ctr.Stop(ctx); err != nil </span><span class="cov0" title="0">{
-                        return crex.Wrap(runtime.ErrRuntime, err)
-                }</span>
+                return r.exportStage(ctx, ctr, output)
+        }</span>
 
-                <span class="cov0" title="0">if err := ctr.Export(ctx, output, r.entrypoint); err != nil </span><span class="cov0" title="0">{
-                        return crex.Wrap(runtime.ErrRuntime, err)
-                }</span>
-        }
+        <span class="cov0" title="0">return nil</span>
+}
+
+// Resolves the base image source and starts the stage container.
+func (r *recipe) startStageContainer(ctx context.Context, stage manifest.Stage, index int, platform string) (*runtime.Container, error) <span class="cov0" title="0">{
+        imagePath, err := r.resolveImageSource(stage)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">id := r.containerID(stage.Name, index, platform)
+        ctr, err := r.rt.StartContainer(ctx, imagePath, id, platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(runtime.ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">return ctr, nil</span>
+}
+
+// Resolves the stage's base image source to an absolute path or reference string.
+//
+// For file sources, relative paths are resolved against the build context directory.
+// Reference sources are returned as-is.
+func (r *recipe) resolveImageSource(stage manifest.Stage) (string, error) <span class="cov0" title="0">{
+        src, err := stage.ParseFrom()
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+
+        <span class="cov0" title="0">if src.Type == manifest.SourceFile &amp;&amp; !filepath.IsAbs(src.Value) </span><span class="cov0" title="0">{
+                return filepath.Join(r.context, src.Value), nil
+        }</span>
+
+        <span class="cov0" title="0">return src.Value, nil</span>
+}
+
+// Stops the container and exports it as the final image.
+func (r *recipe) exportStage(ctx context.Context, ctr *runtime.Container, output string) error <span class="cov0" title="0">{
+        if err := ctr.Stop(ctx); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(runtime.ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := ctr.Export(ctx, output, r.entrypoint); err != nil </span><span class="cov0" title="0">{
+                return crex.Wrap(runtime.ErrRuntime, err)
+        }</span>
 
         <span class="cov0" title="0">return nil</span>
 }
