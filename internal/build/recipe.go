@@ -88,15 +88,9 @@ func (r *recipe) buildStage(ctx context.Context, stage manifest.Stage, index int
 	label := stageLabel(stage.Name, index)
 	slog.Info(fmt.Sprintf("building stage %s", label), "platform", platform)
 
-	src, err := stage.ParseFrom()
+	ctr, err := r.startStageContainer(ctx, stage, index, platform)
 	if err != nil {
 		return err
-	}
-
-	id := r.containerID(stage.Name, index, platform)
-	ctr, err := r.rt.StartContainer(ctx, src.Value, id, platform)
-	if err != nil {
-		return crex.Wrap(runtime.ErrRuntime, err)
 	}
 
 	r.containers = append(r.containers, ctr)
@@ -109,13 +103,53 @@ func (r *recipe) buildStage(ctx context.Context, stage manifest.Stage, index int
 	}
 
 	if !stage.Transient {
-		if err := ctr.Stop(ctx); err != nil {
-			return crex.Wrap(runtime.ErrRuntime, err)
-		}
+		return r.exportStage(ctx, ctr, output)
+	}
 
-		if err := ctr.Export(ctx, output, r.entrypoint); err != nil {
-			return crex.Wrap(runtime.ErrRuntime, err)
-		}
+	return nil
+}
+
+// Resolves the base image source and starts the stage container.
+func (r *recipe) startStageContainer(ctx context.Context, stage manifest.Stage, index int, platform string) (*runtime.Container, error) {
+	imagePath, err := r.resolveImageSource(stage)
+	if err != nil {
+		return nil, err
+	}
+
+	id := r.containerID(stage.Name, index, platform)
+	ctr, err := r.rt.StartContainer(ctx, imagePath, id, platform)
+	if err != nil {
+		return nil, crex.Wrap(runtime.ErrRuntime, err)
+	}
+
+	return ctr, nil
+}
+
+// Resolves the stage's base image source to an absolute path or reference string.
+//
+// For file sources, relative paths are resolved against the build context directory.
+// Reference sources are returned as-is.
+func (r *recipe) resolveImageSource(stage manifest.Stage) (string, error) {
+	src, err := stage.ParseFrom()
+	if err != nil {
+		return "", err
+	}
+
+	if src.Type == manifest.SourceFile && !filepath.IsAbs(src.Value) {
+		return filepath.Join(r.context, src.Value), nil
+	}
+
+	return src.Value, nil
+}
+
+// Stops the container and exports it as the final image.
+func (r *recipe) exportStage(ctx context.Context, ctr *runtime.Container, output string) error {
+	if err := ctr.Stop(ctx); err != nil {
+		return crex.Wrap(runtime.ErrRuntime, err)
+	}
+
+	if err := ctr.Export(ctx, output, r.entrypoint); err != nil {
+		return crex.Wrap(runtime.ErrRuntime, err)
 	}
 
 	return nil
