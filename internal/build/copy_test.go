@@ -60,13 +60,18 @@ func TestParseCopy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if src != tt.src {
-				t.Errorf("src = %q, want %q", src, tt.src)
-			}
-			if dest != tt.dest {
-				t.Errorf("dest = %q, want %q", dest, tt.dest)
-			}
+			assertParseCopy(t, src, dest, tt.src, tt.dest)
 		})
+	}
+}
+
+func assertParseCopy(t *testing.T, gotSrc, gotDest, wantSrc, wantDest string) {
+	t.Helper()
+	if gotSrc != wantSrc {
+		t.Errorf("src = %q, want %q", gotSrc, wantSrc)
+	}
+	if gotDest != wantDest {
+		t.Errorf("dest = %q, want %q", gotDest, wantDest)
 	}
 }
 
