@@ -844,10 +844,8 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(rt \*Runtime\) ImportImage\(ctx context.Context, path, tag string\) error](<#Runtime.ImportImage>)
   - [func \(rt \*Runtime\) StartContainer\(ctx context.Context, path string, id string, platform string\) \(\*Container, error\)](<#Runtime.StartContainer>)
   - [func \(rt \*Runtime\) StartFromTag\(ctx context.Context, tag, id string\) \(\*Container, error\)](<#Runtime.StartFromTag>)
-  - [func \(rt \*Runtime\) importArchive\(ctx context.Context, path string\) \(images.Image, error\)](<#Runtime.importArchive>)
   - [func \(rt \*Runtime\) resolveImage\(ctx context.Context, tag, platform string\) \(containerd.Image, error\)](<#Runtime.resolveImage>)
-  - [func \(rt \*Runtime\) tagImage\(ctx context.Context, source images.Image, tag string\) error](<#Runtime.tagImage>)
-  - [func \(rt \*Runtime\) unpackImage\(ctx context.Context, tag, platform string\) error](<#Runtime.unpackImage>)
+  - [func \(rt \*Runtime\) transferImage\(ctx context.Context, path, tag, platform string\) error](<#Runtime.transferImage>)
 
 
 ## Constants
@@ -879,9 +877,7 @@ const exportFilename = "image.tar"
 
 ```go
 var (
-    ErrRuntime        = errors.New("runtime error")
-    ErrEmptyArchive   = errors.New("no images found in archive")
-    ErrMultipleImages = errors.New("archive contains multiple images")
+    ErrRuntime = errors.New("runtime error")
 )
 ```
 
@@ -1248,7 +1244,7 @@ func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error
 
 Imports an OCI archive, tags it under the given name, and unpacks it for the host platform.
 
-The archive is imported into the content store, tagged with the provided name, and the layers are unpacked into the snapshotter.
+The archive is transferred server\-side into containerd's content store, tagged with the provided name, and the layers are unpacked into the snapshotter.
 
 <a name="Runtime.StartContainer"></a>
 ### func \(\*Runtime\) StartContainer
@@ -1259,7 +1255,7 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
 
 Imports an OCI archive, unpacks it for the target platform, and starts a container.
 
-The archive is imported into containerd's content store and tagged with a deterministic name derived from the path. The layers for the target platform are unpacked into the snapshotter, a container is created with a fresh snapshot, and a long\-running task \(sleep infinity\) is started so that subsequent Exec calls have a running process to attach to. Any existing container with the same ID is removed before the new one is created. Building for a platform other than the host requires QEMU / binfmt\_misc support in the kernel.
+The archive is transferred server\-side into containerd's content store, tagged with a deterministic name derived from the path, and the layers for the target platform are unpacked into the snapshotter. A container is created with a fresh snapshot and a long\-running task \(sleep infinity\) is started so that subsequent Exec calls have a running process to attach to. Any existing container with the same ID is removed before the new one is created. Building for a platform other than the host requires QEMU / binfmt\_misc support in the kernel.
 
 <a name="Runtime.StartFromTag"></a>
 ### func \(\*Runtime\) StartFromTag
@@ -1272,17 +1268,6 @@ Starts a container from a previously imported image tag.
 
 Any stale container with the same ID is cleaned up first. The container runs detached with a long\-running task.
 
-<a name="Runtime.importArchive"></a>
-### func \(\*Runtime\) importArchive
-
-```go
-func (rt *Runtime) importArchive(ctx context.Context, path string) (images.Image, error)
-```
-
-Imports an OCI archive into the content store.
-
-The archive must contain exactly one image. Multi\-platform archives are supported \(single OCI index with per\-platform manifests\).
-
 <a name="Runtime.resolveImage"></a>
 ### func \(\*Runtime\) resolveImage
 
@@ -1294,25 +1279,16 @@ Looks up a tagged image and selects the manifest for the given platform.
 
 Multi\-platform images contain manifests for multiple architectures. This method selects one, so that subsequent operations target the correct architecture.
 
-<a name="Runtime.tagImage"></a>
-### func \(\*Runtime\) tagImage
+<a name="Runtime.transferImage"></a>
+### func \(\*Runtime\) transferImage
 
 ```go
-func (rt *Runtime) tagImage(ctx context.Context, source images.Image, tag string) error
+func (rt *Runtime) transferImage(ctx context.Context, path, tag, platform string) error
 ```
 
-Tags an imported image under a deterministic name.
+Transfers an OCI archive into containerd's content store server\-side.
 
-Updates the tag if it already exists. Removes the source record when its name differs from the tag to avoid duplicates.
-
-<a name="Runtime.unpackImage"></a>
-### func \(\*Runtime\) unpackImage
-
-```go
-func (rt *Runtime) unpackImage(ctx context.Context, tag, platform string) error
-```
-
-Unpacks the image layers for the target platform into the snapshotter.
+The archive is streamed to containerd which imports it, stores it under the given tag, and unpacks the layers for the target platform into the snapshotter. The entire operation runs inside the containerd process, so cruxd does not need mount privileges.
 
 # server
 
