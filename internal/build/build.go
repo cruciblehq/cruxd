@@ -7,9 +7,9 @@ import (
 	goruntime "runtime"
 
 	"github.com/cruciblehq/crex"
-	"github.com/cruciblehq/spec/paths"
 	"github.com/cruciblehq/cruxd/internal/runtime"
 	"github.com/cruciblehq/spec/manifest"
+	"github.com/cruciblehq/spec/paths"
 )
 
 // Controls recipe execution.
