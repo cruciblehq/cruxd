@@ -81,7 +81,7 @@
 				
 				<option value="file12">github.com/cruciblehq/cruxd/internal/runtime/exec.go (16.4%)</option>
 				
-				<option value="file13">github.com/cruciblehq/cruxd/internal/runtime/export.go (6.1%)</option>
+				<option value="file13">github.com/cruciblehq/cruxd/internal/runtime/export.go (4.2%)</option>
 				
 				<option value="file14">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (4.1%)</option>
 				
@@ -456,9 +456,9 @@ import (
         "strings"
 
         "github.com/cruciblehq/crex"
-        "github.com/cruciblehq/spec/paths"
         "github.com/cruciblehq/cruxd/internal/runtime"
         "github.com/cruciblehq/spec/manifest"
+        "github.com/cruciblehq/spec/paths"
 )
 
 // Holds shared state for building all stages of a recipe.
@@ -576,12 +576,18 @@ func (r *recipe) destroyContainers(ctx context.Context) <span class="cov0" title
 }
 
 // Returns a unique container ID for a stage, scoped to this resource and platform.
+//
+// If resource namescontain any slashes (e.g., "crucible/runtime-go"), they are
+// replaced with dashes to ensure the resulting container ID is valid. The stage
+// name is included when available for readability; otherwise, the 1-based stage
+// index is used.
 func (r *recipe) containerID(name string, index int, platform string) string <span class="cov0" title="0">{
+        resource := strings.ReplaceAll(r.resource, "/", "-")
         slug := platformSlug(platform)
         if name != "" </span><span class="cov0" title="0">{
-                return fmt.Sprintf("%s-%s-stage-%s", r.resource, slug, name)
+                return fmt.Sprintf("%s-%s-stage-%s", resource, slug, name)
         }</span>
-        <span class="cov0" title="0">return fmt.Sprintf("%s-%s-stage-%d", r.resource, slug, index+1)</span>
+        <span class="cov0" title="0">return fmt.Sprintf("%s-%s-stage-%d", resource, slug, index+1)</span>
 }
 
 // Returns the output directory for a specific platform.
@@ -1386,6 +1392,7 @@ import (
         "github.com/containerd/containerd/v2/core/images"
         "github.com/containerd/containerd/v2/core/images/archive"
         "github.com/containerd/containerd/v2/pkg/rootfs"
+        "github.com/containerd/platforms"
         "github.com/cruciblehq/crex"
         "github.com/opencontainers/go-digest"
         ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -1469,6 +1476,11 @@ func (c *Container) exportImage(ctx context.Context, imageName, path string) err
 
 // Loads the image's manifest and config, applies the mutation, and writes
 // the updated blobs back to the content store.
+//
+// When the image root is an OCI Image Index (multi-platform), the index is
+// walked to locate the manifest matching the container's platform. The
+// updated manifest and config are written back, and the index is updated
+// with the new manifest descriptor.
 func (c *Container) updateImage(ctx context.Context, imageName string, mutate func(*ocispec.Manifest, *ocispec.Image)) error <span class="cov0" title="0">{
         is := c.client.ImageService()
 
@@ -1477,33 +1489,96 @@ func (c *Container) updateImage(ctx context.Context, imageName string, mutate fu
                 return err
         }</span>
 
-        <span class="cov0" title="0">manifest, err := c.readManifest(ctx, img.Target)
+        <span class="cov0" title="0">target, index, manifestIdx, err := c.resolveManifestDescriptor(ctx, img.Target, imageName)
         if err != nil </span><span class="cov0" title="0">{
                 return err
         }</span>
 
-        <span class="cov0" title="0">config, err := c.readConfig(ctx, manifest.Config)
+        <span class="cov0" title="0">newManifestDesc, err := c.mutateManifest(ctx, target, imageName, mutate)
         if err != nil </span><span class="cov0" title="0">{
                 return err
+        }</span>
+
+        <span class="cov0" title="0">img.Target, err = c.buildImageTarget(ctx, img.Target, index, manifestIdx, newManifestDesc, imageName)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">_, err = is.Update(ctx, img, "target")
+        return err</span>
+}
+
+// Resolves the image root descriptor to a platform-specific manifest.
+//
+// If the root is an OCI Image Index, the index is read and walked to find
+// the manifest matching the container's platform. Returns the manifest
+// descriptor, the index (nil when the root is already a manifest), and the
+// position of the manifest within the index.
+func (c *Container) resolveManifestDescriptor(ctx context.Context, root ocispec.Descriptor, imageName string) (ocispec.Descriptor, *ocispec.Index, int, error) <span class="cov0" title="0">{
+        if !images.IsIndexType(root.MediaType) </span><span class="cov0" title="0">{
+                return root, nil, 0, nil
+        }</span>
+
+        <span class="cov0" title="0">idx, err := c.readIndex(ctx, root)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, nil, 0, err
+        }</span>
+
+        <span class="cov0" title="0">p, err := platforms.Parse(c.platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, nil, 0, err
+        }</span>
+        <span class="cov0" title="0">matcher := platforms.OnlyStrict(p)
+
+        for i, m := range idx.Manifests </span><span class="cov0" title="0">{
+                if m.Platform != nil &amp;&amp; matcher.Match(*m.Platform) </span><span class="cov0" title="0">{
+                        return m, &amp;idx, i, nil
+                }</span>
+        }
+
+        // Fall back to the first manifest in the index.
+        <span class="cov0" title="0">if len(idx.Manifests) == 0 </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, nil, 0, crex.Wrapf(ErrEmptyIndex, "%s", imageName)
+        }</span>
+        <span class="cov0" title="0">return idx.Manifests[0], &amp;idx, 0, nil</span>
+}
+
+// Reads the manifest and config, applies the mutation, and writes the
+// updated blobs back to the content store.
+func (c *Container) mutateManifest(ctx context.Context, target ocispec.Descriptor, imageName string, mutate func(*ocispec.Manifest, *ocispec.Image)) (ocispec.Descriptor, error) <span class="cov0" title="0">{
+        manifest, err := c.readManifest(ctx, target)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, err
+        }</span>
+
+        <span class="cov0" title="0">config, err := c.readConfig(ctx, manifest.Config)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Descriptor{}, err
         }</span>
 
         <span class="cov0" title="0">mutate(&amp;manifest, &amp;config)
 
         newConfigDesc, err := c.writeBlob(ctx, manifest.Config.MediaType, config, imageName+"-config")
         if err != nil </span><span class="cov0" title="0">{
-                return err
+                return ocispec.Descriptor{}, err
         }</span>
         <span class="cov0" title="0">manifest.Config = newConfigDesc
 
-        manifestLabels := manifestGCLabels(manifest)
-        newManifestDesc, err := c.writeBlob(ctx, img.Target.MediaType, manifest, imageName+"-manifest", content.WithLabels(manifestLabels))
-        if err != nil </span><span class="cov0" title="0">{
-                return err
+        return c.writeBlob(ctx, target.MediaType, manifest, imageName+"-manifest", content.WithLabels(manifestGCLabels(manifest)))</span>
+}
+
+// Produces the final image target descriptor after a manifest update.
+//
+// When the image was resolved through an index, the index entry is replaced
+// with the new manifest descriptor and the index is written back. Otherwise
+// the new manifest descriptor is returned directly.
+func (c *Container) buildImageTarget(ctx context.Context, root ocispec.Descriptor, index *ocispec.Index, manifestIdx int, newManifest ocispec.Descriptor, imageName string) (ocispec.Descriptor, error) <span class="cov0" title="0">{
+        if index == nil </span><span class="cov0" title="0">{
+                return newManifest, nil
         }</span>
 
-        <span class="cov0" title="0">img.Target = newManifestDesc
-        _, err = is.Update(ctx, img, "target")
-        return err</span>
+        <span class="cov0" title="0">index.Manifests[manifestIdx] = newManifest
+        return c.writeBlob(ctx, root.MediaType, index, imageName+"-index", content.WithLabels(indexGCLabels(*index)))</span>
 }
 
 // Loads an OCI manifest from the content store.
@@ -1517,6 +1592,19 @@ func (c *Container) readManifest(ctx context.Context, desc ocispec.Descriptor) (
                 return ocispec.Manifest{}, err
         }</span>
         <span class="cov0" title="0">return m, nil</span>
+}
+
+// Loads an OCI image index from the content store.
+func (c *Container) readIndex(ctx context.Context, desc ocispec.Descriptor) (ocispec.Index, error) <span class="cov0" title="0">{
+        b, err := content.ReadBlob(ctx, c.client.ContentStore(), desc)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Index{}, err
+        }</span>
+        <span class="cov0" title="0">var idx ocispec.Index
+        if err := json.Unmarshal(b, &amp;idx); err != nil </span><span class="cov0" title="0">{
+                return ocispec.Index{}, err
+        }</span>
+        <span class="cov0" title="0">return idx, nil</span>
 }
 
 // Loads an OCI image config from the content store.
@@ -1564,6 +1652,16 @@ func manifestGCLabels(m ocispec.Manifest) map[string]string <span class="cov8" t
                 labels[key] = layer.Digest.String()
         }</span>
         <span class="cov8" title="1">return labels</span>
+}
+
+// Computes containerd GC reference labels for an index's children.
+func indexGCLabels(idx ocispec.Index) map[string]string <span class="cov0" title="0">{
+        labels := make(map[string]string, len(idx.Manifests))
+        for i, m := range idx.Manifests </span><span class="cov0" title="0">{
+                key := fmt.Sprintf("containerd.io/gc.ref.content.m.%d", i)
+                labels[key] = m.Digest.String()
+        }</span>
+        <span class="cov0" title="0">return labels</span>
 }
 </pre>
 		

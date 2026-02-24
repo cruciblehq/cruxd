@@ -580,6 +580,8 @@ func (r *recipe) containerID(name string, index int, platform string) string
 
 Returns a unique container ID for a stage, scoped to this resource and platform.
 
+If resource namescontain any slashes \(e.g., "crucible/runtime\-go"\), they are replaced with dashes to ensure the resulting container ID is valid. The stage name is included when available for readability; otherwise, the 1\-based stage index is used.
+
 <a name="recipe.destroyContainers"></a>
 ### func \(\*recipe\) destroyContainers
 
@@ -809,6 +811,7 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
 - [Variables](<#variables>)
 - [func defaultPlatform\(\) string](<#defaultPlatform>)
 - [func imageTag\(path string\) string](<#imageTag>)
+- [func indexGCLabels\(idx ocispec.Index\) map\[string\]string](<#indexGCLabels>)
 - [func manifestGCLabels\(m ocispec.Manifest\) map\[string\]string](<#manifestGCLabels>)
 - [func mergeEnv\(base, overrides \[\]string\) \[\]string](<#mergeEnv>)
 - [func nextExecID\(\) string](<#nextExecID>)
@@ -822,15 +825,19 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(c \*Container\) MkdirAll\(ctx context.Context, path string\) error](<#Container.MkdirAll>)
   - [func \(c \*Container\) Status\(ctx context.Context\) \(protocol.ContainerState, error\)](<#Container.Status>)
   - [func \(c \*Container\) Stop\(ctx context.Context\) error](<#Container.Stop>)
+  - [func \(c \*Container\) buildImageTarget\(ctx context.Context, root ocispec.Descriptor, index \*ocispec.Index, manifestIdx int, newManifest ocispec.Descriptor, imageName string\) \(ocispec.Descriptor, error\)](<#Container.buildImageTarget>)
   - [func \(c \*Container\) buildProcessSpec\(ctx context.Context, env \[\]string, workdir string, args ...string\) \(\*specs.Process, error\)](<#Container.buildProcessSpec>)
   - [func \(c \*Container\) create\(ctx context.Context, image containerd.Image\) \(containerd.Container, error\)](<#Container.create>)
   - [func \(c \*Container\) execCommand\(ctx context.Context, stdin io.Reader, stdout io.Writer, env \[\]string, workdir string, args ...string\) \(int, string, error\)](<#Container.execCommand>)
   - [func \(c \*Container\) execProcess\(ctx context.Context, pspec \*specs.Process, stdin io.Reader, stdout, stderr io.Writer\) \(int, error\)](<#Container.execProcess>)
   - [func \(c \*Container\) exportImage\(ctx context.Context, imageName, path string\) error](<#Container.exportImage>)
   - [func \(c \*Container\) mustExec\(ctx context.Context, desc string, stdin io.Reader, stdout io.Writer, args ...string\) error](<#Container.mustExec>)
+  - [func \(c \*Container\) mutateManifest\(ctx context.Context, target ocispec.Descriptor, imageName string, mutate func\(\*ocispec.Manifest, \*ocispec.Image\)\) \(ocispec.Descriptor, error\)](<#Container.mutateManifest>)
   - [func \(c \*Container\) readConfig\(ctx context.Context, desc ocispec.Descriptor\) \(ocispec.Image, error\)](<#Container.readConfig>)
+  - [func \(c \*Container\) readIndex\(ctx context.Context, desc ocispec.Descriptor\) \(ocispec.Index, error\)](<#Container.readIndex>)
   - [func \(c \*Container\) readManifest\(ctx context.Context, desc ocispec.Descriptor\) \(ocispec.Manifest, error\)](<#Container.readManifest>)
   - [func \(c \*Container\) remove\(ctx context.Context\)](<#Container.remove>)
+  - [func \(c \*Container\) resolveManifestDescriptor\(ctx context.Context, root ocispec.Descriptor, imageName string\) \(ocispec.Descriptor, \*ocispec.Index, int, error\)](<#Container.resolveManifestDescriptor>)
   - [func \(c \*Container\) snapshotDiff\(ctx context.Context, info containers.Container\) \(ocispec.Descriptor, digest.Digest, error\)](<#Container.snapshotDiff>)
   - [func \(c \*Container\) startTask\(ctx context.Context, ctr containerd.Container\) error](<#Container.startTask>)
   - [func \(c \*Container\) updateImage\(ctx context.Context, imageName string, mutate func\(\*ocispec.Manifest, \*ocispec.Image\)\) error](<#Container.updateImage>)
@@ -876,7 +883,8 @@ const exportFilename = "image.tar"
 
 ```go
 var (
-    ErrRuntime = errors.New("runtime error")
+    ErrRuntime    = errors.New("runtime error")
+    ErrEmptyIndex = errors.New("empty image index")
 )
 ```
 
@@ -905,6 +913,15 @@ func imageTag(path string) string
 Produces a containerd image tag from an archive path.
 
 The path is hashed to produce a tag that is always valid for OCI references regardless of which characters the path contains.
+
+<a name="indexGCLabels"></a>
+## func indexGCLabels
+
+```go
+func indexGCLabels(idx ocispec.Index) map[string]string
+```
+
+Computes containerd GC reference labels for an index's children.
 
 <a name="manifestGCLabels"></a>
 ## func manifestGCLabels
@@ -1045,6 +1062,17 @@ Stops the container's task.
 
 The running task is killed and deleted. The container metadata is preserved. Calling Stop on an already\-stopped container is not an error.
 
+<a name="Container.buildImageTarget"></a>
+### func \(\*Container\) buildImageTarget
+
+```go
+func (c *Container) buildImageTarget(ctx context.Context, root ocispec.Descriptor, index *ocispec.Index, manifestIdx int, newManifest ocispec.Descriptor, imageName string) (ocispec.Descriptor, error)
+```
+
+Produces the final image target descriptor after a manifest update.
+
+When the image was resolved through an index, the index entry is replaced with the new manifest descriptor and the index is written back. Otherwise the new manifest descriptor is returned directly.
+
 <a name="Container.buildProcessSpec"></a>
 ### func \(\*Container\) buildProcessSpec
 
@@ -1103,6 +1131,15 @@ func (c *Container) mustExec(ctx context.Context, desc string, stdin io.Reader, 
 
 Helper method that runs a command inside the container, returning an error that includes desc if the process exits with a non\-zero code.
 
+<a name="Container.mutateManifest"></a>
+### func \(\*Container\) mutateManifest
+
+```go
+func (c *Container) mutateManifest(ctx context.Context, target ocispec.Descriptor, imageName string, mutate func(*ocispec.Manifest, *ocispec.Image)) (ocispec.Descriptor, error)
+```
+
+Reads the manifest and config, applies the mutation, and writes the updated blobs back to the content store.
+
 <a name="Container.readConfig"></a>
 ### func \(\*Container\) readConfig
 
@@ -1111,6 +1148,15 @@ func (c *Container) readConfig(ctx context.Context, desc ocispec.Descriptor) (oc
 ```
 
 Loads an OCI image config from the content store.
+
+<a name="Container.readIndex"></a>
+### func \(\*Container\) readIndex
+
+```go
+func (c *Container) readIndex(ctx context.Context, desc ocispec.Descriptor) (ocispec.Index, error)
+```
+
+Loads an OCI image index from the content store.
 
 <a name="Container.readManifest"></a>
 ### func \(\*Container\) readManifest
@@ -1131,6 +1177,17 @@ func (c *Container) remove(ctx context.Context)
 Removes an existing container with this ID, if one exists.
 
 Any running task is killed and the container is deleted along with its snapshot. This is a no\-op when no container with the ID is found.
+
+<a name="Container.resolveManifestDescriptor"></a>
+### func \(\*Container\) resolveManifestDescriptor
+
+```go
+func (c *Container) resolveManifestDescriptor(ctx context.Context, root ocispec.Descriptor, imageName string) (ocispec.Descriptor, *ocispec.Index, int, error)
+```
+
+Resolves the image root descriptor to a platform\-specific manifest.
+
+If the root is an OCI Image Index, the index is read and walked to find the manifest matching the container's platform. Returns the manifest descriptor, the index \(nil when the root is already a manifest\), and the position of the manifest within the index.
 
 <a name="Container.snapshotDiff"></a>
 ### func \(\*Container\) snapshotDiff
@@ -1158,6 +1215,8 @@ func (c *Container) updateImage(ctx context.Context, imageName string, mutate fu
 ```
 
 Loads the image's manifest and config, applies the mutation, and writes the updated blobs back to the content store.
+
+When the image root is an OCI Image Index \(multi\-platform\), the index is walked to locate the manifest matching the container's platform. The updated manifest and config are written back, and the index is updated with the new manifest descriptor.
 
 <a name="Container.writeBlob"></a>
 ### func \(\*Container\) writeBlob
