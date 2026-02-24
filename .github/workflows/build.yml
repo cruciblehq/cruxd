@@ -113,4 +113,6 @@ jobs:
   # --- Publish Pages ---
   publish-pages:
     needs: release
+    permissions:
+      contents: write
     uses: cruciblehq/.github/.github/workflows/publish-pages.yml@main
