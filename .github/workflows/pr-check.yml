@@ -1,0 +1,11 @@
+name: PR Check
+
+on:
+    pull_request:
+        branches: [main]
+
+jobs:
+    check:
+        uses: cruciblehq/.github/.github/workflows/go-check.yml@main
+        with:
+            coverage-threshold: 5

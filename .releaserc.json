@@ -1,18 +1,6 @@
 {
     "branches": [
-        "main",
-        {
-            "name": "rc",
-            "prerelease": "rc"
-        },
-        {
-            "name": "beta",
-            "prerelease": "beta"
-        },
-        {
-            "name": "alpha",
-            "prerelease": "alpha"
-        }
+        "main"
     ],
     "plugins": [
         [

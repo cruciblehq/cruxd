@@ -1,9 +1,0 @@
-name: Validate Promotion
-
-on:
-    pull_request:
-        branches: [beta, rc, main]
-
-jobs:
-    validate:
-        uses: cruciblehq/.github/.github/workflows/validate-promotion.yml@main
