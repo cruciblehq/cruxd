@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/cruciblehq/crex"
-	"github.com/cruciblehq/spec/paths"
 	"github.com/cruciblehq/cruxd/internal/runtime"
 	"github.com/cruciblehq/spec/manifest"
+	"github.com/cruciblehq/spec/paths"
 )
 
 // Holds shared state for building all stages of a recipe.
@@ -129,12 +129,18 @@ func (r *recipe) destroyContainers(ctx context.Context) {
 }
 
 // Returns a unique container ID for a stage, scoped to this resource and platform.
+//
+// If resource namescontain any slashes (e.g., "crucible/runtime-go"), they are
+// replaced with dashes to ensure the resulting container ID is valid. The stage
+// name is included when available for readability; otherwise, the 1-based stage
+// index is used.
 func (r *recipe) containerID(name string, index int, platform string) string {
+	resource := strings.ReplaceAll(r.resource, "/", "-")
 	slug := platformSlug(platform)
 	if name != "" {
-		return fmt.Sprintf("%s-%s-stage-%s", r.resource, slug, name)
+		return fmt.Sprintf("%s-%s-stage-%s", resource, slug, name)
 	}
-	return fmt.Sprintf("%s-%s-stage-%d", r.resource, slug, index+1)
+	return fmt.Sprintf("%s-%s-stage-%d", resource, slug, index+1)
 }
 
 // Returns the output directory for a specific platform.
