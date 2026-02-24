@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [alpha, beta, rc, main]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,129 +25,92 @@ jobs:
         with:
           go-version: "1.25.x"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
       - name: Verify Go modules
-        uses: cruciblehq/.github/actions/verify-go-modules@main
+        uses: cruciblehq/.github/actions/go-verify-modules@main
 
       - name: Run Go tests and coverage
         uses: cruciblehq/.github/actions/go-test-coverage@main
         with:
           coverage-threshold: "5"
 
-      - name: Generate Go reference docs
-        run: |
-          go install github.com/princjef/gomarkdoc/cmd/gomarkdoc@latest
-          mkdir -p docs
-          gomarkdoc -u -o docs/index.md ./...
-
-      - name: Upload docs artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs
-          path: docs/
+      - name: Generate Go docs
+        uses: cruciblehq/.github/actions/go-docs@main
 
       - name: Semantic Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GIT_AUTHOR_NAME: "github-actions[bot]"
-          GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
-          GIT_COMMITTER_NAME: "github-actions[bot]"
-          GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
-        run: |
-          npx --yes \
-            -p semantic-release@^23.0.0 \
-            -p @semantic-release/changelog@^6.0.3 \
-            -p @semantic-release/commit-analyzer@^13.0.0 \
-            -p @semantic-release/exec@^6.0.3 \
-            -p @semantic-release/git@^10.0.1 \
-            -p @semantic-release/github@^10.0.0 \
-            -p @semantic-release/release-notes-generator@^14.0.0 \
-            -p conventional-changelog-conventionalcommits@^7.0.0 \
-            semantic-release
-
-      - name: Check for release
         id: release
-        run: |
-          if [ -f .release-version ]; then
-            VERSION=$(cat .release-version)
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "released=true" >> "$GITHUB_OUTPUT"
-            echo "Released version: $VERSION"
-          else
-            echo "released=false" >> "$GITHUB_OUTPUT"
-            echo "No new release"
-          fi
+        uses: cruciblehq/.github/actions/semantic-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build binaries
-        if: steps.release.outputs.released == 'true'
+  # --- Build ---
+  build:
+    name: Build linux/${{ matrix.goarch }}
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        goarch: [amd64, arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - name: Build
         run: |
-          VERSION="${{ steps.release.outputs.version }}"
+          VERSION="${{ needs.release.outputs.version }}"
           COMMIT=$(git rev-parse --short HEAD)
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            STAGE="release"
-          else
-            STAGE="${{ github.ref_name }}"
-          fi
-          LDFLAGS="-X github.com/cruciblehq/cruxd/internal.version=${VERSION} \
-                   -X github.com/cruciblehq/cruxd/internal.stage=${STAGE} \
-                   -X github.com/cruciblehq/cruxd/internal.gitCommit=${COMMIT}"
+          STAGE="release"
 
-          for GOARCH in amd64 arm64; do
-            mkdir -p "dist/linux-${GOARCH}"
-            GOOS=linux GOARCH=${GOARCH} go build -v \
-              -ldflags "${LDFLAGS}" \
-              -o "dist/linux-${GOARCH}/cruxd" ./cmd/cruxd
-            tar -czf "dist/cruxd-linux-${GOARCH}.tar.gz" \
-              -C "dist/linux-${GOARCH}" cruxd
+          mkdir -p dist
+          GOOS=linux GOARCH=${{ matrix.goarch }} go build -v \
+            -ldflags "-X github.com/cruciblehq/cruxd/internal.version=${VERSION} \
+                      -X github.com/cruciblehq/cruxd/internal.stage=${STAGE} \
+                      -X github.com/cruciblehq/cruxd/internal.gitCommit=${COMMIT}" \
+            -o dist/cruxd ./cmd/cruxd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cruxd-linux-${{ matrix.goarch }}
+          path: dist/cruxd
+
+  # --- Upload Release Assets ---
+  upload-assets:
+    name: Upload Release Assets
+    needs: [release, build]
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package archives
+        run: |
+          mkdir -p dist
+          for dir in artifacts/cruxd-linux-*; do
+            [ -d "$dir" ] || continue
+            ARCH=$(basename "$dir" | sed 's/^cruxd-linux-//')
+            tar -czf "dist/cruxd-linux-${ARCH}.tar.gz" -C "$dir" cruxd
           done
 
           cd dist && sha256sum cruxd-linux-*.tar.gz > checksums.txt
           echo "Archives:"
           ls -lh cruxd-linux-*.tar.gz checksums.txt
 
-      - name: Upload release assets
-        if: steps.release.outputs.released == 'true'
+      - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.release.outputs.version }}"
-          gh release upload "$TAG" \
-            dist/cruxd-linux-amd64.tar.gz \
-            dist/cruxd-linux-arm64.tar.gz \
-            dist/checksums.txt \
+          TAG="v${{ needs.release.outputs.version }}"
+          gh release upload "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY"
 
   # --- Publish Pages ---
   publish-pages:
-    name: Publish Pages
     needs: release
-    if: github.ref_name == 'main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: coverage-badge
-          path: badges
-      - uses: actions/download-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage
-      - uses: actions/download-artifact@v4
-        with:
-          name: docs
-          path: docs
-      - name: Prepare gh-pages
-        run: |
-          mkdir public
-          cp -r coverage badges docs public/
-      - name: Publish to GitHub Pages
-        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
+    uses: cruciblehq/.github/.github/workflows/publish-pages.yml@main
