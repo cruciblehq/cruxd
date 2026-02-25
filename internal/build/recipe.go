@@ -44,7 +44,9 @@ func newRecipe(rt *runtime.Runtime, opts Options) *recipe {
 // image to the platform's output directory. All stage containers are destroyed
 // when the build completes.
 func (r *recipe) build(ctx context.Context, recipeStages []manifest.Stage) (*Result, error) {
-	defer r.destroyContainers(ctx)
+	// Use a background context for cleanup so containers are always destroyed,
+	// even if the parent context was cancelled (e.g., client disconnect).
+	defer r.destroyContainers(context.Background())
 
 	for _, platform := range r.platforms {
 		if err := r.buildPlatform(ctx, recipeStages, platform); err != nil {
