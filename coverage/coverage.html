@@ -79,17 +79,19 @@
 				
 				<option value="file11">github.com/cruciblehq/cruxd/internal/runtime/copy.go (0.0%)</option>
 				
-				<option value="file12">github.com/cruciblehq/cruxd/internal/runtime/exec.go (16.4%)</option>
+				<option value="file12">github.com/cruciblehq/cruxd/internal/runtime/donereader.go (0.0%)</option>
 				
-				<option value="file13">github.com/cruciblehq/cruxd/internal/runtime/export.go (4.2%)</option>
+				<option value="file13">github.com/cruciblehq/cruxd/internal/runtime/exec.go (13.8%)</option>
 				
-				<option value="file14">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (4.1%)</option>
+				<option value="file14">github.com/cruciblehq/cruxd/internal/runtime/export.go (4.2%)</option>
 				
-				<option value="file15">github.com/cruciblehq/cruxd/internal/server/handlers.go (0.0%)</option>
+				<option value="file15">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (4.1%)</option>
 				
-				<option value="file16">github.com/cruciblehq/cruxd/internal/server/server.go (0.0%)</option>
+				<option value="file16">github.com/cruciblehq/cruxd/internal/server/handlers.go (0.0%)</option>
 				
-				<option value="file17">github.com/cruciblehq/cruxd/internal/variables.go (0.0%)</option>
+				<option value="file17">github.com/cruciblehq/cruxd/internal/server/server.go (0.0%)</option>
+				
+				<option value="file18">github.com/cruciblehq/cruxd/internal/variables.go (0.0%)</option>
 				
 				</select>
 			</div>
@@ -174,9 +176,9 @@ import (
         goruntime "runtime"
 
         "github.com/cruciblehq/crex"
-        "github.com/cruciblehq/spec/paths"
         "github.com/cruciblehq/cruxd/internal/runtime"
         "github.com/cruciblehq/spec/manifest"
+        "github.com/cruciblehq/spec/paths"
 )
 
 // Controls recipe execution.
@@ -491,7 +493,9 @@ func newRecipe(rt *runtime.Runtime, opts Options) *recipe <span class="cov0" tit
 // image to the platform's output directory. All stage containers are destroyed
 // when the build completes.
 func (r *recipe) build(ctx context.Context, recipeStages []manifest.Stage) (*Result, error) <span class="cov0" title="0">{
-        defer r.destroyContainers(ctx)
+        // Use a background context for cleanup so containers are always destroyed,
+        // even if the parent context was cancelled (e.g., client disconnect).
+        defer r.destroyContainers(context.Background())
 
         for _, platform := range r.platforms </span><span class="cov0" title="0">{
                 if err := r.buildPlatform(ctx, recipeStages, platform); err != nil </span><span class="cov0" title="0">{
@@ -1214,6 +1218,41 @@ func (c *Container) mustExec(ctx context.Context, desc string, stdin io.Reader, 
 		<pre class="file" id="file12" style="display: none">package runtime
 
 import (
+        "io"
+        "sync"
+)
+
+// Wraps an [io.Reader] and signals when it returns [io.EOF].
+//
+// The done channel is closed exactly once on the first EOF, making it safe to
+// use from multiple goroutines.
+type doneReader struct {
+        r    io.Reader
+        once sync.Once
+        done chan struct{}
+}
+
+// Creates a new [doneReader] wrapping the given reader.
+func newDoneReader(r io.Reader) *doneReader <span class="cov0" title="0">{
+        return &amp;doneReader{r: r, done: make(chan struct{})}
+}</span>
+
+// Delegates to the underlying reader.
+//
+// Closes the done channel on the first [io.EOF]. Non-EOF errors are returned
+// without closing the channel.
+func (d *doneReader) Read(p []byte) (int, error) <span class="cov0" title="0">{
+        n, err := d.r.Read(p)
+        if err == io.EOF </span><span class="cov0" title="0">{
+                d.once.Do(func() </span><span class="cov0" title="0">{ close(d.done) }</span>)
+        }
+        <span class="cov0" title="0">return n, err</span>
+}
+</pre>
+		
+		<pre class="file" id="file13" style="display: none">package runtime
+
+import (
         "bytes"
         "context"
         "fmt"
@@ -1221,6 +1260,7 @@ import (
         "strings"
         "sync/atomic"
 
+        containerd "github.com/containerd/containerd/v2/client"
         "github.com/containerd/containerd/v2/pkg/cio"
         "github.com/cruciblehq/crex"
         specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -1362,15 +1402,15 @@ func (c *Container) execCommand(ctx context.Context, stdin io.Reader, stdout io.
 // are connected to the process. Nil streams are replaced with io.Discard
 // (stdout/stderr) or left disconnected (stdin). A non-zero exit code is not
 // treated as an error; the caller decides how to handle it.
+//
+// When stdin is provided, the container's stdin is explicitly closed after the
+// reader returns EOF so the exec process receives the EOF signal. This is
+// required because the containerd shim holds both ends of the stdin FIFO open
+// and will not propagate EOF on its own.
 func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin io.Reader, stdout, stderr io.Writer) (int, error) <span class="cov0" title="0">{
-        ctr, err := c.client.LoadContainer(ctx, c.id)
+        task, err := c.loadTask(ctx)
         if err != nil </span><span class="cov0" title="0">{
-                return 0, crex.Wrap(ErrRuntime, err)
-        }</span>
-
-        <span class="cov0" title="0">task, err := ctr.Task(ctx, nil)
-        if err != nil </span><span class="cov0" title="0">{
-                return 0, crex.Wrap(ErrRuntime, err)
+                return 0, err
         }</span>
 
         <span class="cov0" title="0">if stdout == nil </span><span class="cov0" title="0">{
@@ -1380,6 +1420,14 @@ func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin
                 stderr = io.Discard
         }</span>
 
+        // Wrap stdin to detect when the reader returns EOF.
+        <span class="cov0" title="0">var stdinDone &lt;-chan struct{}
+        if stdin != nil </span><span class="cov0" title="0">{
+                dr := newDoneReader(stdin)
+                stdin = dr
+                stdinDone = dr.done
+        }</span>
+
         <span class="cov0" title="0">process, err := task.Exec(ctx, nextExecID(), pspec, cio.NewCreator(
                 cio.WithStreams(stdin, stdout, stderr),
         ))
@@ -1387,7 +1435,32 @@ func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin
                 return 0, crex.Wrap(ErrRuntime, err)
         }</span>
 
-        <span class="cov0" title="0">statusC, err := process.Wait(ctx)
+        <span class="cov0" title="0">return awaitProcess(ctx, process, stdinDone)</span>
+}
+
+// Loads the container's running task.
+func (c *Container) loadTask(ctx context.Context) (containerd.Task, error) <span class="cov0" title="0">{
+        ctr, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">task, err := ctr.Task(ctx, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">return task, nil</span>
+}
+
+// Waits for an exec process to exit and returns the exit code.
+//
+// The process is started, then the function blocks until it exits. If
+// stdinDone is non-nil, the process stdin is closed when the channel fires
+// so the exec process receives EOF. The process is always deleted before
+// returning.
+func awaitProcess(ctx context.Context, process containerd.Process, stdinDone &lt;-chan struct{}) (int, error) <span class="cov0" title="0">{
+        statusC, err := process.Wait(ctx)
         if err != nil </span><span class="cov0" title="0">{
                 process.Delete(ctx)
                 return 0, crex.Wrap(ErrRuntime, err)
@@ -1397,6 +1470,16 @@ func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin
                 process.Delete(ctx)
                 return 0, crex.Wrap(ErrRuntime, err)
         }</span>
+
+        // Close the container's stdin after the reader is exhausted. Without this
+        // the shim keeps its write end of the stdin FIFO open and the exec process
+        // never receives EOF.
+        <span class="cov0" title="0">if stdinDone != nil </span><span class="cov0" title="0">{
+                go func() </span><span class="cov0" title="0">{
+                        &lt;-stdinDone
+                        process.CloseIO(ctx, containerd.WithStdinCloser)
+                }</span>()
+        }
 
         <span class="cov0" title="0">exitStatus := &lt;-statusC
         process.Delete(ctx)
@@ -1410,7 +1493,7 @@ func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin
 }
 </pre>
 		
-		<pre class="file" id="file13" style="display: none">package runtime
+		<pre class="file" id="file14" style="display: none">package runtime
 
 import (
         "bytes"
@@ -1699,7 +1782,7 @@ func indexGCLabels(idx ocispec.Index) map[string]string <span class="cov0" title
 }
 </pre>
 		
-		<pre class="file" id="file14" style="display: none">package runtime
+		<pre class="file" id="file15" style="display: none">package runtime
 
 import (
         "context"
@@ -1947,7 +2030,7 @@ func (rt *Runtime) Container(id string) *Container <span class="cov0" title="0">
 }</span>
 </pre>
 		
-		<pre class="file" id="file15" style="display: none">package server
+		<pre class="file" id="file16" style="display: none">package server
 
 import (
         "context"
@@ -1993,7 +2076,7 @@ func (s *Server) handleBuild(ctx context.Context, conn net.Conn, payload json.Ra
 }
 
 // Handles a status command.
-func (s *Server) handleStatus(conn net.Conn) <span class="cov0" title="0">{
+func (s *Server) handleStatus(_ context.Context, conn net.Conn) <span class="cov0" title="0">{
         s.mu.Lock()
         builds := s.builds
         s.mu.Unlock()
@@ -2010,7 +2093,7 @@ func (s *Server) handleStatus(conn net.Conn) <span class="cov0" title="0">{
 }</span>
 
 // Handles a shutdown command.
-func (s *Server) handleShutdown(conn net.Conn) <span class="cov0" title="0">{
+func (s *Server) handleShutdown(_ context.Context, conn net.Conn) <span class="cov0" title="0">{
         s.respond(conn, protocol.CmdOK, nil)
         slog.Info("shutdown requested")
 
@@ -2174,13 +2257,14 @@ func (s *Server) handleContainerUpdate(ctx context.Context, conn net.Conn, paylo
 }
 </pre>
 		
-		<pre class="file" id="file16" style="display: none">package server
+		<pre class="file" id="file17" style="display: none">package server
 
 import (
         "bufio"
         "context"
         "encoding/json"
         "fmt"
+        "io"
         "log/slog"
         "net"
         "os"
@@ -2200,8 +2284,8 @@ const (
         // Default containerd socket address.
         DefaultContainerdAddress = "/run/containerd/containerd.sock"
 
-        // Default container d namespace for images and containers.
-        DefaultContainerdNamespace = "crux"
+        // Default containerd namespace for images and containers.
+        DefaultContainerdNamespace = "cruxd"
 
         // Group name used to grant socket access. Members of this group can
         // connect to the daemon socket without owning the process.
@@ -2387,13 +2471,14 @@ func (s *Server) handle(conn net.Conn) <span class="cov0" title="0">{
 
         <span class="cov0" title="0">slog.Info("command received", "command", env.Command)
 
-        s.dispatch(conn, env.Command, payload)</span>
+        ctx, cancel := contextWithDisconnect(context.Background(), reader)
+        defer cancel()
+
+        s.dispatch(ctx, conn, env.Command, payload)</span>
 }
 
 // Routes a command to the appropriate handler.
-func (s *Server) dispatch(conn net.Conn, cmd protocol.Command, payload json.RawMessage) <span class="cov0" title="0">{
-        ctx := context.Background()
-
+func (s *Server) dispatch(ctx context.Context, conn net.Conn, cmd protocol.Command, payload json.RawMessage) <span class="cov0" title="0">{
         switch cmd </span>{
         case protocol.CmdBuild:<span class="cov0" title="0">
                 s.handleBuild(ctx, conn, payload)</span>
@@ -2414,9 +2499,9 @@ func (s *Server) dispatch(conn net.Conn, cmd protocol.Command, payload json.RawM
         case protocol.CmdContainerUpdate:<span class="cov0" title="0">
                 s.handleContainerUpdate(ctx, conn, payload)</span>
         case protocol.CmdStatus:<span class="cov0" title="0">
-                s.handleStatus(conn)</span>
+                s.handleStatus(ctx, conn)</span>
         case protocol.CmdShutdown:<span class="cov0" title="0">
-                s.handleShutdown(conn)</span>
+                s.handleShutdown(ctx, conn)</span>
         default:<span class="cov0" title="0">
                 s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{
                         Message: fmt.Sprintf("unknown command: %s", cmd),
@@ -2435,16 +2520,39 @@ func (s *Server) respond(conn net.Conn, cmd protocol.Command, payload any) <span
         conn.Write(data)</span>
 }
 
-// Writes the daemon PID to the PID file.
+// Writes the daemon PID to the PID file so the CLI can detect whether the
+// daemon is already running and send it signals.
 func writePID() error <span class="cov0" title="0">{
         if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil </span><span class="cov0" title="0">{
                 return err
         }</span>
         <span class="cov0" title="0">return os.WriteFile(paths.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), paths.DefaultFileMode)</span>
 }
+
+// Returns a derived context that is cancelled when the remote end of the
+// connection closes.
+//
+// Detection works by reading from r in a background goroutine. The read blocks
+// until the peer closes the connection, at which point it returns an error and
+// the derived context is cancelled. The caller must ensure that no further data
+// is expected on r for the lifetime of the returned context. If data arrives
+// unexpectedly, it will be discarded and the context will be cancelled
+// prematurely. The returned [context.CancelFunc] must always be called to
+// release resources, even if the connection closes on its own.
+func contextWithDisconnect(parent context.Context, r io.Reader) (context.Context, context.CancelFunc) <span class="cov0" title="0">{
+        ctx, cancel := context.WithCancel(parent)
+
+        go func() </span><span class="cov0" title="0">{
+                buf := make([]byte, 1)
+                r.Read(buf)
+                cancel()
+        }</span>()
+
+        <span class="cov0" title="0">return ctx, cancel</span>
+}
 </pre>
 		
-		<pre class="file" id="file17" style="display: none">package internal
+		<pre class="file" id="file18" style="display: none">package internal
 
 import (
         "fmt"

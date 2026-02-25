@@ -841,6 +841,7 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
 
 - [Constants](<#constants>)
 - [Variables](<#variables>)
+- [func awaitProcess\(ctx context.Context, process containerd.Process, stdinDone \<\-chan struct\{\}\) \(int, error\)](<#awaitProcess>)
 - [func defaultPlatform\(\) string](<#defaultPlatform>)
 - [func imageTag\(path string\) string](<#imageTag>)
 - [func indexGCLabels\(idx ocispec.Index\) map\[string\]string](<#indexGCLabels>)
@@ -863,6 +864,7 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(c \*Container\) execCommand\(ctx context.Context, stdin io.Reader, stdout io.Writer, env \[\]string, workdir string, args ...string\) \(int, string, error\)](<#Container.execCommand>)
   - [func \(c \*Container\) execProcess\(ctx context.Context, pspec \*specs.Process, stdin io.Reader, stdout, stderr io.Writer\) \(int, error\)](<#Container.execProcess>)
   - [func \(c \*Container\) exportImage\(ctx context.Context, imageName, path string\) error](<#Container.exportImage>)
+  - [func \(c \*Container\) loadTask\(ctx context.Context\) \(containerd.Task, error\)](<#Container.loadTask>)
   - [func \(c \*Container\) mustExec\(ctx context.Context, desc string, stdin io.Reader, stdout io.Writer, args ...string\) error](<#Container.mustExec>)
   - [func \(c \*Container\) mutateManifest\(ctx context.Context, target ocispec.Descriptor, imageName string, mutate func\(\*ocispec.Manifest, \*ocispec.Image\)\) \(ocispec.Descriptor, error\)](<#Container.mutateManifest>)
   - [func \(c \*Container\) readConfig\(ctx context.Context, desc ocispec.Descriptor\) \(ocispec.Image, error\)](<#Container.readConfig>)
@@ -885,6 +887,9 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(rt \*Runtime\) StartFromTag\(ctx context.Context, tag, id string\) \(\*Container, error\)](<#Runtime.StartFromTag>)
   - [func \(rt \*Runtime\) resolveImage\(ctx context.Context, tag, platform string\) \(containerd.Image, error\)](<#Runtime.resolveImage>)
   - [func \(rt \*Runtime\) transferImage\(ctx context.Context, path, tag, platform string\) error](<#Runtime.transferImage>)
+- [type doneReader](<#doneReader>)
+  - [func newDoneReader\(r io.Reader\) \*doneReader](<#newDoneReader>)
+  - [func \(d \*doneReader\) Read\(p \[\]byte\) \(int, error\)](<#doneReader.Read>)
 
 
 ## Constants
@@ -925,6 +930,17 @@ var (
 ```go
 var execSeq uint64
 ```
+
+<a name="awaitProcess"></a>
+## func awaitProcess
+
+```go
+func awaitProcess(ctx context.Context, process containerd.Process, stdinDone <-chan struct{}) (int, error)
+```
+
+Waits for an exec process to exit and returns the exit code.
+
+The process is started, then the function blocks until it exits. If stdinDone is non\-nil, the process stdin is closed when the channel fires so the exec process receives EOF. The process is always deleted before returning.
 
 <a name="defaultPlatform"></a>
 ## func defaultPlatform
@@ -1145,6 +1161,8 @@ Starts a process inside the container's running task, waits for it to exit, and 
 
 The process is attached to the task as an additional exec, not as the primary process. This requires the task to already be running \(started by \[Container.startTask\] during container creation\). stdin, stdout, and stderr are connected to the process. Nil streams are replaced with io.Discard \(stdout/stderr\) or left disconnected \(stdin\). A non\-zero exit code is not treated as an error; the caller decides how to handle it.
 
+When stdin is provided, the container's stdin is explicitly closed after the reader returns EOF so the exec process receives the EOF signal. This is required because the containerd shim holds both ends of the stdin FIFO open and will not propagate EOF on its own.
+
 <a name="Container.exportImage"></a>
 ### func \(\*Container\) exportImage
 
@@ -1153,6 +1171,15 @@ func (c *Container) exportImage(ctx context.Context, imageName, path string) err
 ```
 
 Writes the named image to an OCI tar archive at the given path.
+
+<a name="Container.loadTask"></a>
+### func \(\*Container\) loadTask
+
+```go
+func (c *Container) loadTask(ctx context.Context) (containerd.Task, error)
+```
+
+Loads the container's running task.
 
 <a name="Container.mustExec"></a>
 ### func \(\*Container\) mustExec
@@ -1380,6 +1407,41 @@ Transfers an OCI archive into containerd's content store server\-side.
 
 The archive is streamed to containerd which imports it, stores it under the given tag, and unpacks the layers for the target platform into the snapshotter. The entire operation runs inside the containerd process, so cruxd does not need mount privileges.
 
+<a name="doneReader"></a>
+## type doneReader
+
+Wraps an [io.Reader](<https://pkg.go.dev/io/#Reader>) and signals when it returns [io.EOF](<https://pkg.go.dev/io/#EOF>).
+
+The done channel is closed exactly once on the first EOF, making it safe to use from multiple goroutines.
+
+```go
+type doneReader struct {
+    r    io.Reader
+    once sync.Once
+    done chan struct{}
+}
+```
+
+<a name="newDoneReader"></a>
+### func newDoneReader
+
+```go
+func newDoneReader(r io.Reader) *doneReader
+```
+
+Creates a new \[doneReader\] wrapping the given reader.
+
+<a name="doneReader.Read"></a>
+### func \(\*doneReader\) Read
+
+```go
+func (d *doneReader) Read(p []byte) (int, error)
+```
+
+Delegates to the underlying reader.
+
+Closes the done channel on the first [io.EOF](<https://pkg.go.dev/io/#EOF>). Non\-EOF errors are returned without closing the channel.
+
 # server
 
 ```go
@@ -1415,6 +1477,7 @@ srv.Wait()
 
 - [Constants](<#constants>)
 - [Variables](<#variables>)
+- [func contextWithDisconnect\(parent context.Context, r io.Reader\) \(context.Context, context.CancelFunc\)](<#contextWithDisconnect>)
 - [func listen\(socketPath string\) \(net.Listener, error\)](<#listen>)
 - [func setSocketPermissions\(socketPath string\) error](<#setSocketPermissions>)
 - [func writePID\(\) error](<#writePID>)
@@ -1425,7 +1488,7 @@ srv.Wait()
   - [func \(s \*Server\) Stop\(\) error](<#Server.Stop>)
   - [func \(s \*Server\) Wait\(\)](<#Server.Wait>)
   - [func \(s \*Server\) accept\(\)](<#Server.accept>)
-  - [func \(s \*Server\) dispatch\(conn net.Conn, cmd protocol.Command, payload json.RawMessage\)](<#Server.dispatch>)
+  - [func \(s \*Server\) dispatch\(ctx context.Context, conn net.Conn, cmd protocol.Command, payload json.RawMessage\)](<#Server.dispatch>)
   - [func \(s \*Server\) handle\(conn net.Conn\)](<#Server.handle>)
   - [func \(s \*Server\) handleBuild\(ctx context.Context, conn net.Conn, payload json.RawMessage\)](<#Server.handleBuild>)
   - [func \(s \*Server\) handleContainerDestroy\(ctx context.Context, conn net.Conn, payload json.RawMessage\)](<#Server.handleContainerDestroy>)
@@ -1436,8 +1499,8 @@ srv.Wait()
   - [func \(s \*Server\) handleImageDestroy\(ctx context.Context, conn net.Conn, payload json.RawMessage\)](<#Server.handleImageDestroy>)
   - [func \(s \*Server\) handleImageImport\(ctx context.Context, conn net.Conn, payload json.RawMessage\)](<#Server.handleImageImport>)
   - [func \(s \*Server\) handleImageStart\(ctx context.Context, conn net.Conn, payload json.RawMessage\)](<#Server.handleImageStart>)
-  - [func \(s \*Server\) handleShutdown\(conn net.Conn\)](<#Server.handleShutdown>)
-  - [func \(s \*Server\) handleStatus\(conn net.Conn\)](<#Server.handleStatus>)
+  - [func \(s \*Server\) handleShutdown\(\_ context.Context, conn net.Conn\)](<#Server.handleShutdown>)
+  - [func \(s \*Server\) handleStatus\(\_ context.Context, conn net.Conn\)](<#Server.handleStatus>)
   - [func \(s \*Server\) respond\(conn net.Conn, cmd protocol.Command, payload any\)](<#Server.respond>)
 
 
@@ -1451,8 +1514,8 @@ const (
     // Default containerd socket address.
     DefaultContainerdAddress = "/run/containerd/containerd.sock"
 
-    // Default container d namespace for images and containers.
-    DefaultContainerdNamespace = "crux"
+    // Default containerd namespace for images and containers.
+    DefaultContainerdNamespace = "cruxd"
 
     // Group name used to grant socket access. Members of this group can
     // connect to the daemon socket without owning the process.
@@ -1473,6 +1536,17 @@ var (
     ErrServer = errors.New("server error")
 )
 ```
+
+<a name="contextWithDisconnect"></a>
+## func contextWithDisconnect
+
+```go
+func contextWithDisconnect(parent context.Context, r io.Reader) (context.Context, context.CancelFunc)
+```
+
+Returns a derived context that is cancelled when the remote end of the connection closes.
+
+Detection works by reading from r in a background goroutine. The read blocks until the peer closes the connection, at which point it returns an error and the derived context is cancelled. The caller must ensure that no further data is expected on r for the lifetime of the returned context. If data arrives unexpectedly, it will be discarded and the context will be cancelled prematurely. The returned [context.CancelFunc](<https://pkg.go.dev/context/#CancelFunc>) must always be called to release resources, even if the connection closes on its own.
 
 <a name="listen"></a>
 ## func listen
@@ -1499,7 +1573,7 @@ Restricts socket access to owner and group. The daemon does not run as root; any
 func writePID() error
 ```
 
-Writes the daemon PID to the PID file.
+Writes the daemon PID to the PID file so the CLI can detect whether the daemon is already running and send it signals.
 
 <a name="Config"></a>
 ## type Config
@@ -1582,7 +1656,7 @@ Accepts connections in a loop until the server shuts down.
 ### func \(\*Server\) dispatch
 
 ```go
-func (s *Server) dispatch(conn net.Conn, cmd protocol.Command, payload json.RawMessage)
+func (s *Server) dispatch(ctx context.Context, conn net.Conn, cmd protocol.Command, payload json.RawMessage)
 ```
 
 Routes a command to the appropriate handler.
@@ -1685,7 +1759,7 @@ Handles an image\-start command.
 ### func \(\*Server\) handleShutdown
 
 ```go
-func (s *Server) handleShutdown(conn net.Conn)
+func (s *Server) handleShutdown(_ context.Context, conn net.Conn)
 ```
 
 Handles a shutdown command.
@@ -1694,7 +1768,7 @@ Handles a shutdown command.
 ### func \(\*Server\) handleStatus
 
 ```go
-func (s *Server) handleStatus(conn net.Conn)
+func (s *Server) handleStatus(_ context.Context, conn net.Conn)
 ```
 
 Handles a status command.
