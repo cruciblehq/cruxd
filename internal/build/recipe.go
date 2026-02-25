@@ -113,13 +113,22 @@ func (r *recipe) buildStage(ctx context.Context, stage manifest.Stage, index int
 
 // Resolves the base image source and starts the stage container.
 func (r *recipe) startStageContainer(ctx context.Context, stage manifest.Stage, index int, platform string) (*runtime.Container, error) {
-	imagePath, err := r.resolveImageSource(stage)
+	src, err := r.resolveImageSource(stage)
 	if err != nil {
 		return nil, err
 	}
 
 	id := r.containerID(stage.Name, index, platform)
-	ctr, err := r.rt.StartContainer(ctx, imagePath, id, platform)
+
+	var ctr *runtime.Container
+	switch src.Type {
+	case manifest.SourceFile:
+		ctr, err = r.rt.StartContainer(ctx, src.Value, id, platform)
+	case manifest.SourceOCI:
+		ctr, err = r.rt.StartContainerFromOCI(ctx, src.Value, id, platform)
+	default:
+		return nil, crex.Wrapf(ErrBuild, "unsupported source type %q", src.Type)
+	}
 	if err != nil {
 		return nil, crex.Wrap(runtime.ErrRuntime, err)
 	}
@@ -127,21 +136,22 @@ func (r *recipe) startStageContainer(ctx context.Context, stage manifest.Stage, 
 	return ctr, nil
 }
 
-// Resolves the stage's base image source to an absolute path or reference string.
+// Resolves the stage's base image source.
 //
-// For file sources, relative paths are resolved against the build context directory.
-// Reference sources are returned as-is.
-func (r *recipe) resolveImageSource(stage manifest.Stage) (string, error) {
+// For file sources, relative paths are resolved against the build context
+// directory. OCI references (single-token image names like "alpine:3.21")
+// are returned as-is for the runtime to pull from a container registry.
+func (r *recipe) resolveImageSource(stage manifest.Stage) (manifest.Source, error) {
 	src, err := stage.ParseFrom()
 	if err != nil {
-		return "", err
+		return manifest.Source{}, err
 	}
 
 	if src.Type == manifest.SourceFile && !filepath.IsAbs(src.Value) {
-		return filepath.Join(r.context, src.Value), nil
+		src.Value = filepath.Join(r.context, src.Value)
 	}
 
-	return src.Value, nil
+	return src, nil
 }
 
 // Stops the container and exports it as the final image.
