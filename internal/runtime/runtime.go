@@ -93,8 +93,6 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
-	slog.Debug("container started", "id", id, "image", tag)
-
 	return c, nil
 }
 
@@ -130,8 +128,6 @@ func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id str
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
-	slog.Debug("container started", "id", id, "ref", ref)
-
 	return c, nil
 }
 
@@ -165,8 +161,6 @@ func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (
 	if err != nil {
 		return nil, err
 	}
-
-	slog.Debug("image pulled", "ref", fullRef)
 
 	return image, nil
 }
@@ -239,8 +233,6 @@ func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error {
 	if err := rt.transferImage(ctx, path, tag, platform); err != nil {
 		return crex.Wrap(ErrRuntime, err)
 	}
-
-	slog.Debug("image imported", "tag", tag)
 	return nil
 }
 
@@ -274,7 +266,6 @@ func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
-	slog.Debug("container started", "id", id, "image", tag)
 	return c, nil
 }
 
@@ -303,7 +294,6 @@ func (rt *Runtime) DestroyImage(ctx context.Context, tag string) error {
 		return crex.Wrap(ErrRuntime, err)
 	}
 
-	slog.Debug("image destroyed", "tag", tag)
 	return nil
 }
 

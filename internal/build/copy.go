@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"context"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,8 +51,6 @@ func executeHostCopy(ctx context.Context, ctr *runtime.Container, src, dest, bui
 		return crex.Wrap(ErrCopy, err)
 	}
 
-	slog.Debug("copy", "src", src, "dest", dest, "dir", info.IsDir())
-
 	pr, pw := io.Pipe()
 
 	go func() {
@@ -86,8 +83,6 @@ func executeStageCopy(ctx context.Context, ctr *runtime.Container, stages map[st
 	if !ok {
 		return crex.Wrapf(ErrCopy, "unknown stage %q", stage)
 	}
-
-	slog.Debug("cross-stage copy", "stage", stage, "src", path, "dest", dest)
 
 	pr, pw := io.Pipe()
 
