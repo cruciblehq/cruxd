@@ -16,6 +16,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/cruciblehq/crex"
+	dref "github.com/distribution/reference"
 )
 
 const (
@@ -95,6 +96,79 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
 	slog.Debug("container started", "id", id, "image", tag)
 
 	return c, nil
+}
+
+// Pulls a remote OCI image and starts a container from it.
+//
+// The reference is a single-token OCI image name such as "alpine:3.21" or
+// "docker.io/library/alpine:3.21", normalized to include the default
+// registry and tag when omitted. The image is pulled into containerd's
+// content store, unpacked for the target platform, and a container with a
+// long-running task is started. Any existing container with the same ID is
+// removed before the new one is created.
+func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id string, platform string) (*Container, error) {
+	image, err := rt.pullImage(ctx, ref, platform)
+	if err != nil {
+		return nil, crex.Wrap(ErrRuntime, err)
+	}
+
+	c := &Container{
+		client:   rt.client,
+		id:       id,
+		platform: platform,
+	}
+
+	c.remove(ctx)
+
+	ctr, err := c.create(ctx, image)
+	if err != nil {
+		return nil, crex.Wrap(ErrRuntime, err)
+	}
+
+	if err := c.startTask(ctx, ctr); err != nil {
+		ctr.Delete(ctx, containerd.WithSnapshotCleanup)
+		return nil, crex.Wrap(ErrRuntime, err)
+	}
+
+	slog.Debug("container started", "id", id, "ref", ref)
+
+	return c, nil
+}
+
+// Pulls a remote OCI image from a container registry.
+//
+// The reference is a single-token image name. Bare names like "alpine:3.21"
+// are normalized to "docker.io/library/alpine:3.21", and untagged names
+// receive the "latest" tag. This differs from Crucible references, which
+// are space-separated name and version strings resolved by the CLI before
+// reaching the daemon. The image is stored in containerd's content store
+// and unpacked into the snapshotter for the specified platform.
+func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (containerd.Image, error) {
+	named, err := dref.ParseNormalizedNamed(ref)
+	if err != nil {
+		return nil, err
+	}
+	fullRef := dref.TagNameOnly(named).String()
+
+	p, err := platforms.Parse(platform)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Info("pulling image", "ref", fullRef, "platform", platform)
+
+	image, err := rt.client.Pull(ctx, fullRef,
+		containerd.WithPlatformMatcher(platforms.Only(p)),
+		containerd.WithPullUnpack,
+		containerd.WithPullSnapshotter(snapshotter),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Debug("image pulled", "ref", fullRef)
+
+	return image, nil
 }
 
 // Transfers an OCI archive into containerd's content store server-side.
