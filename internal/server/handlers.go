@@ -44,7 +44,7 @@ func (s *Server) handleBuild(ctx context.Context, conn net.Conn, payload json.Ra
 }
 
 // Handles a status command.
-func (s *Server) handleStatus(conn net.Conn) {
+func (s *Server) handleStatus(_ context.Context, conn net.Conn) {
 	s.mu.Lock()
 	builds := s.builds
 	s.mu.Unlock()
@@ -61,7 +61,7 @@ func (s *Server) handleStatus(conn net.Conn) {
 }
 
 // Handles a shutdown command.
-func (s *Server) handleShutdown(conn net.Conn) {
+func (s *Server) handleShutdown(_ context.Context, conn net.Conn) {
 	s.respond(conn, protocol.CmdOK, nil)
 	slog.Info("shutdown requested")
 

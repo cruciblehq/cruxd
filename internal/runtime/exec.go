@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/cruciblehq/crex"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -149,15 +150,15 @@ func (c *Container) execCommand(ctx context.Context, stdin io.Reader, stdout io.
 // are connected to the process. Nil streams are replaced with io.Discard
 // (stdout/stderr) or left disconnected (stdin). A non-zero exit code is not
 // treated as an error; the caller decides how to handle it.
+//
+// When stdin is provided, the container's stdin is explicitly closed after the
+// reader returns EOF so the exec process receives the EOF signal. This is
+// required because the containerd shim holds both ends of the stdin FIFO open
+// and will not propagate EOF on its own.
 func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	ctr, err := c.client.LoadContainer(ctx, c.id)
+	task, err := c.loadTask(ctx)
 	if err != nil {
-		return 0, crex.Wrap(ErrRuntime, err)
-	}
-
-	task, err := ctr.Task(ctx, nil)
-	if err != nil {
-		return 0, crex.Wrap(ErrRuntime, err)
+		return 0, err
 	}
 
 	if stdout == nil {
@@ -167,6 +168,14 @@ func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin
 		stderr = io.Discard
 	}
 
+	// Wrap stdin to detect when the reader returns EOF.
+	var stdinDone <-chan struct{}
+	if stdin != nil {
+		dr := newDoneReader(stdin)
+		stdin = dr
+		stdinDone = dr.done
+	}
+
 	process, err := task.Exec(ctx, nextExecID(), pspec, cio.NewCreator(
 		cio.WithStreams(stdin, stdout, stderr),
 	))
@@ -174,6 +183,31 @@ func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin
 		return 0, crex.Wrap(ErrRuntime, err)
 	}
 
+	return awaitProcess(ctx, process, stdinDone)
+}
+
+// Loads the container's running task.
+func (c *Container) loadTask(ctx context.Context) (containerd.Task, error) {
+	ctr, err := c.client.LoadContainer(ctx, c.id)
+	if err != nil {
+		return nil, crex.Wrap(ErrRuntime, err)
+	}
+
+	task, err := ctr.Task(ctx, nil)
+	if err != nil {
+		return nil, crex.Wrap(ErrRuntime, err)
+	}
+
+	return task, nil
+}
+
+// Waits for an exec process to exit and returns the exit code.
+//
+// The process is started, then the function blocks until it exits. If
+// stdinDone is non-nil, the process stdin is closed when the channel fires
+// so the exec process receives EOF. The process is always deleted before
+// returning.
+func awaitProcess(ctx context.Context, process containerd.Process, stdinDone <-chan struct{}) (int, error) {
 	statusC, err := process.Wait(ctx)
 	if err != nil {
 		process.Delete(ctx)
@@ -183,6 +217,16 @@ func (c *Container) execProcess(ctx context.Context, pspec *specs.Process, stdin
 	if err := process.Start(ctx); err != nil {
 		process.Delete(ctx)
 		return 0, crex.Wrap(ErrRuntime, err)
+	}
+
+	// Close the container's stdin after the reader is exhausted. Without this
+	// the shim keeps its write end of the stdin FIFO open and the exec process
+	// never receives EOF.
+	if stdinDone != nil {
+		go func() {
+			<-stdinDone
+			process.CloseIO(ctx, containerd.WithStdinCloser)
+		}()
 	}
 
 	exitStatus := <-statusC

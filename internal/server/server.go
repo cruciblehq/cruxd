@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -24,8 +25,8 @@ const (
 	// Default containerd socket address.
 	DefaultContainerdAddress = "/run/containerd/containerd.sock"
 
-	// Default container d namespace for images and containers.
-	DefaultContainerdNamespace = "crux"
+	// Default containerd namespace for images and containers.
+	DefaultContainerdNamespace = "cruxd"
 
 	// Group name used to grant socket access. Members of this group can
 	// connect to the daemon socket without owning the process.
@@ -211,13 +212,14 @@ func (s *Server) handle(conn net.Conn) {
 
 	slog.Info("command received", "command", env.Command)
 
-	s.dispatch(conn, env.Command, payload)
+	ctx, cancel := contextWithDisconnect(context.Background(), reader)
+	defer cancel()
+
+	s.dispatch(ctx, conn, env.Command, payload)
 }
 
 // Routes a command to the appropriate handler.
-func (s *Server) dispatch(conn net.Conn, cmd protocol.Command, payload json.RawMessage) {
-	ctx := context.Background()
-
+func (s *Server) dispatch(ctx context.Context, conn net.Conn, cmd protocol.Command, payload json.RawMessage) {
 	switch cmd {
 	case protocol.CmdBuild:
 		s.handleBuild(ctx, conn, payload)
@@ -238,9 +240,9 @@ func (s *Server) dispatch(conn net.Conn, cmd protocol.Command, payload json.RawM
 	case protocol.CmdContainerUpdate:
 		s.handleContainerUpdate(ctx, conn, payload)
 	case protocol.CmdStatus:
-		s.handleStatus(conn)
+		s.handleStatus(ctx, conn)
 	case protocol.CmdShutdown:
-		s.handleShutdown(conn)
+		s.handleShutdown(ctx, conn)
 	default:
 		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{
 			Message: fmt.Sprintf("unknown command: %s", cmd),
@@ -259,10 +261,33 @@ func (s *Server) respond(conn net.Conn, cmd protocol.Command, payload any) {
 	conn.Write(data)
 }
 
-// Writes the daemon PID to the PID file.
+// Writes the daemon PID to the PID file so the CLI can detect whether the
+// daemon is already running and send it signals.
 func writePID() error {
 	if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil {
 		return err
 	}
 	return os.WriteFile(paths.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), paths.DefaultFileMode)
+}
+
+// Returns a derived context that is cancelled when the remote end of the
+// connection closes.
+//
+// Detection works by reading from r in a background goroutine. The read blocks
+// until the peer closes the connection, at which point it returns an error and
+// the derived context is cancelled. The caller must ensure that no further data
+// is expected on r for the lifetime of the returned context. If data arrives
+// unexpectedly, it will be discarded and the context will be cancelled
+// prematurely. The returned [context.CancelFunc] must always be called to
+// release resources, even if the connection closes on its own.
+func contextWithDisconnect(parent context.Context, r io.Reader) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+
+	go func() {
+		buf := make([]byte, 1)
+		r.Read(buf)
+		cancel()
+	}()
+
+	return ctx, cancel
 }
