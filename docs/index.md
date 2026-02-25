@@ -318,7 +318,7 @@ if err != nil {
   - [func \(r \*recipe\) destroyContainers\(ctx context.Context\)](<#recipe.destroyContainers>)
   - [func \(r \*recipe\) exportStage\(ctx context.Context, ctr \*runtime.Container, output string\) error](<#recipe.exportStage>)
   - [func \(r \*recipe\) platformOutput\(platform string\) string](<#recipe.platformOutput>)
-  - [func \(r \*recipe\) resolveImageSource\(stage manifest.Stage\) \(string, error\)](<#recipe.resolveImageSource>)
+  - [func \(r \*recipe\) resolveImageSource\(stage manifest.Stage\) \(manifest.Source, error\)](<#recipe.resolveImageSource>)
   - [func \(r \*recipe\) startStageContainer\(ctx context.Context, stage manifest.Stage, index int, platform string\) \(\*runtime.Container, error\)](<#recipe.startStageContainer>)
 - [type stepState](<#stepState>)
   - [func newStepState\(\) \*stepState](<#newStepState>)
@@ -618,12 +618,12 @@ When building for a single platform, the output directory is left as\-is to pres
 ### func \(\*recipe\) resolveImageSource
 
 ```go
-func (r *recipe) resolveImageSource(stage manifest.Stage) (string, error)
+func (r *recipe) resolveImageSource(stage manifest.Stage) (manifest.Source, error)
 ```
 
-Resolves the stage's base image source to an absolute path or reference string.
+Resolves the stage's base image source.
 
-For file sources, relative paths are resolved against the build context directory. Reference sources are returned as\-is.
+For file sources, relative paths are resolved against the build context directory. OCI references \(single\-token image names like "alpine:3.21"\) are returned as\-is for the runtime to pull from a container registry.
 
 <a name="recipe.startStageContainer"></a>
 ### func \(\*recipe\) startStageContainer
@@ -884,7 +884,9 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(rt \*Runtime\) DestroyImage\(ctx context.Context, tag string\) error](<#Runtime.DestroyImage>)
   - [func \(rt \*Runtime\) ImportImage\(ctx context.Context, path, tag string\) error](<#Runtime.ImportImage>)
   - [func \(rt \*Runtime\) StartContainer\(ctx context.Context, path string, id string, platform string\) \(\*Container, error\)](<#Runtime.StartContainer>)
+  - [func \(rt \*Runtime\) StartContainerFromOCI\(ctx context.Context, ref string, id string, platform string\) \(\*Container, error\)](<#Runtime.StartContainerFromOCI>)
   - [func \(rt \*Runtime\) StartFromTag\(ctx context.Context, tag, id string\) \(\*Container, error\)](<#Runtime.StartFromTag>)
+  - [func \(rt \*Runtime\) pullImage\(ctx context.Context, ref string, platform string\) \(containerd.Image, error\)](<#Runtime.pullImage>)
   - [func \(rt \*Runtime\) resolveImage\(ctx context.Context, tag, platform string\) \(containerd.Image, error\)](<#Runtime.resolveImage>)
   - [func \(rt \*Runtime\) transferImage\(ctx context.Context, path, tag, platform string\) error](<#Runtime.transferImage>)
 - [type doneReader](<#doneReader>)
@@ -1374,6 +1376,17 @@ Imports an OCI archive, unpacks it for the target platform, and starts a contain
 
 The archive is transferred server\-side into containerd's content store, tagged with a deterministic name derived from the path, and the layers for the target platform are unpacked into the snapshotter. A container is created with a fresh snapshot and a long\-running task \(sleep infinity\) is started so that subsequent Exec calls have a running process to attach to. Any existing container with the same ID is removed before the new one is created. Building for a platform other than the host requires QEMU / binfmt\_misc support in the kernel.
 
+<a name="Runtime.StartContainerFromOCI"></a>
+### func \(\*Runtime\) StartContainerFromOCI
+
+```go
+func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id string, platform string) (*Container, error)
+```
+
+Pulls a remote OCI image and starts a container from it.
+
+The reference is a single\-token OCI image name such as "alpine:3.21" or "docker.io/library/alpine:3.21", normalized to include the default registry and tag when omitted. The image is pulled into containerd's content store, unpacked for the target platform, and a container with a long\-running task is started. Any existing container with the same ID is removed before the new one is created.
+
 <a name="Runtime.StartFromTag"></a>
 ### func \(\*Runtime\) StartFromTag
 
@@ -1384,6 +1397,17 @@ func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container
 Starts a container from a previously imported image tag.
 
 Any stale container with the same ID is cleaned up first. The container runs detached with a long\-running task.
+
+<a name="Runtime.pullImage"></a>
+### func \(\*Runtime\) pullImage
+
+```go
+func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (containerd.Image, error)
+```
+
+Pulls a remote OCI image from a container registry.
+
+The reference is a single\-token image name. Bare names like "alpine:3.21" are normalized to "docker.io/library/alpine:3.21", and untagged names receive the "latest" tag. This differs from Crucible references, which are space\-separated name and version strings resolved by the CLI before reaching the daemon. The image is stored in containerd's content store and unpacked into the snapshotter for the specified platform.
 
 <a name="Runtime.resolveImage"></a>
 ### func \(\*Runtime\) resolveImage

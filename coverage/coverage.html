@@ -85,7 +85,7 @@
 				
 				<option value="file14">github.com/cruciblehq/cruxd/internal/runtime/export.go (4.2%)</option>
 				
-				<option value="file15">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (4.1%)</option>
+				<option value="file15">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (3.0%)</option>
 				
 				<option value="file16">github.com/cruciblehq/cruxd/internal/server/handlers.go (0.0%)</option>
 				
@@ -562,35 +562,45 @@ func (r *recipe) buildStage(ctx context.Context, stage manifest.Stage, index int
 
 // Resolves the base image source and starts the stage container.
 func (r *recipe) startStageContainer(ctx context.Context, stage manifest.Stage, index int, platform string) (*runtime.Container, error) <span class="cov0" title="0">{
-        imagePath, err := r.resolveImageSource(stage)
+        src, err := r.resolveImageSource(stage)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
 
         <span class="cov0" title="0">id := r.containerID(stage.Name, index, platform)
-        ctr, err := r.rt.StartContainer(ctx, imagePath, id, platform)
-        if err != nil </span><span class="cov0" title="0">{
+
+        var ctr *runtime.Container
+        switch src.Type </span>{
+        case manifest.SourceFile:<span class="cov0" title="0">
+                ctr, err = r.rt.StartContainer(ctx, src.Value, id, platform)</span>
+        case manifest.SourceOCI:<span class="cov0" title="0">
+                ctr, err = r.rt.StartContainerFromOCI(ctx, src.Value, id, platform)</span>
+        default:<span class="cov0" title="0">
+                return nil, crex.Wrapf(ErrBuild, "unsupported source type %q", src.Type)</span>
+        }
+        <span class="cov0" title="0">if err != nil </span><span class="cov0" title="0">{
                 return nil, crex.Wrap(runtime.ErrRuntime, err)
         }</span>
 
         <span class="cov0" title="0">return ctr, nil</span>
 }
 
-// Resolves the stage's base image source to an absolute path or reference string.
+// Resolves the stage's base image source.
 //
-// For file sources, relative paths are resolved against the build context directory.
-// Reference sources are returned as-is.
-func (r *recipe) resolveImageSource(stage manifest.Stage) (string, error) <span class="cov0" title="0">{
+// For file sources, relative paths are resolved against the build context
+// directory. OCI references (single-token image names like "alpine:3.21")
+// are returned as-is for the runtime to pull from a container registry.
+func (r *recipe) resolveImageSource(stage manifest.Stage) (manifest.Source, error) <span class="cov0" title="0">{
         src, err := stage.ParseFrom()
         if err != nil </span><span class="cov0" title="0">{
-                return "", err
+                return manifest.Source{}, err
         }</span>
 
         <span class="cov0" title="0">if src.Type == manifest.SourceFile &amp;&amp; !filepath.IsAbs(src.Value) </span><span class="cov0" title="0">{
-                return filepath.Join(r.context, src.Value), nil
+                src.Value = filepath.Join(r.context, src.Value)
         }</span>
 
-        <span class="cov0" title="0">return src.Value, nil</span>
+        <span class="cov0" title="0">return src, nil</span>
 }
 
 // Stops the container and exports it as the final image.
@@ -1800,6 +1810,7 @@ import (
         "github.com/containerd/errdefs"
         "github.com/containerd/platforms"
         "github.com/cruciblehq/crex"
+        dref "github.com/distribution/reference"
 )
 
 const (
@@ -1879,6 +1890,79 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
         <span class="cov0" title="0">slog.Debug("container started", "id", id, "image", tag)
 
         return c, nil</span>
+}
+
+// Pulls a remote OCI image and starts a container from it.
+//
+// The reference is a single-token OCI image name such as "alpine:3.21" or
+// "docker.io/library/alpine:3.21", normalized to include the default
+// registry and tag when omitted. The image is pulled into containerd's
+// content store, unpacked for the target platform, and a container with a
+// long-running task is started. Any existing container with the same ID is
+// removed before the new one is created.
+func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id string, platform string) (*Container, error) <span class="cov0" title="0">{
+        image, err := rt.pullImage(ctx, ref, platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">c := &amp;Container{
+                client:   rt.client,
+                id:       id,
+                platform: platform,
+        }
+
+        c.remove(ctx)
+
+        ctr, err := c.create(ctx, image)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">if err := c.startTask(ctx, ctr); err != nil </span><span class="cov0" title="0">{
+                ctr.Delete(ctx, containerd.WithSnapshotCleanup)
+                return nil, crex.Wrap(ErrRuntime, err)
+        }</span>
+
+        <span class="cov0" title="0">slog.Debug("container started", "id", id, "ref", ref)
+
+        return c, nil</span>
+}
+
+// Pulls a remote OCI image from a container registry.
+//
+// The reference is a single-token image name. Bare names like "alpine:3.21"
+// are normalized to "docker.io/library/alpine:3.21", and untagged names
+// receive the "latest" tag. This differs from Crucible references, which
+// are space-separated name and version strings resolved by the CLI before
+// reaching the daemon. The image is stored in containerd's content store
+// and unpacked into the snapshotter for the specified platform.
+func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (containerd.Image, error) <span class="cov0" title="0">{
+        named, err := dref.ParseNormalizedNamed(ref)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">fullRef := dref.TagNameOnly(named).String()
+
+        p, err := platforms.Parse(platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">slog.Info("pulling image", "ref", fullRef, "platform", platform)
+
+        image, err := rt.client.Pull(ctx, fullRef,
+                containerd.WithPlatformMatcher(platforms.Only(p)),
+                containerd.WithPullUnpack,
+                containerd.WithPullSnapshotter(snapshotter),
+        )
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">slog.Debug("image pulled", "ref", fullRef)
+
+        return image, nil</span>
 }
 
 // Transfers an OCI archive into containerd's content store server-side.
