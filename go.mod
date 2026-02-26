@@ -7,7 +7,7 @@ require (
 	github.com/containerd/containerd/v2 v2.2.1
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/platforms v1.0.0-rc.2
-	github.com/cruciblehq/spec v0.2.0
+	github.com/cruciblehq/spec v0.2.1
 	github.com/distribution/reference v0.6.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
@@ -63,3 +63,5 @@ require (
 	github.com/cruciblehq/crex v0.1.0
 	golang.org/x/sys v0.38.0 // indirect
 )
+
+replace github.com/cruciblehq/spec => ../spec
