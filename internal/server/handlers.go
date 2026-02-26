@@ -98,7 +98,13 @@ func (s *Server) handleImageStart(ctx context.Context, conn net.Conn, payload js
 
 	tag := protocol.ImageTag(req.Ref, req.Version)
 
-	if _, err := s.runtime.StartFromTag(ctx, tag, req.ID); err != nil {
+	id := req.ID
+	if id == "" {
+		id = req.Ref
+	}
+	id = protocol.ContainerID(id)
+
+	if _, err := s.runtime.StartFromTag(ctx, tag, id); err != nil {
 		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{Message: err.Error()})
 		return
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/cruciblehq/cruxd/internal/runtime"
 	"github.com/cruciblehq/spec/manifest"
 	"github.com/cruciblehq/spec/paths"
+	"github.com/cruciblehq/spec/protocol"
 )
 
 // Holds shared state for building all stages of a recipe.
@@ -181,7 +182,7 @@ func (r *recipe) destroyContainers(ctx context.Context) {
 // name is included when available for readability; otherwise, the 1-based stage
 // index is used.
 func (r *recipe) containerID(name string, index int, platform string) string {
-	resource := strings.ReplaceAll(r.resource, "/", "-")
+	resource := protocol.ContainerID(r.resource)
 	slug := platformSlug(platform)
 	if name != "" {
 		return fmt.Sprintf("%s-%s-stage-%s", resource, slug, name)
