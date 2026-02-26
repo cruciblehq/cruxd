@@ -13,6 +13,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/transfer/archive"
 	timage "github.com/containerd/containerd/v2/core/transfer/image"
+	tregistry "github.com/containerd/containerd/v2/core/transfer/registry"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/cruciblehq/crex"
@@ -93,8 +94,6 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
-	slog.Debug("container started", "id", id, "image", tag)
-
 	return c, nil
 }
 
@@ -130,8 +129,6 @@ func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id str
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
-	slog.Debug("container started", "id", id, "ref", ref)
-
 	return c, nil
 }
 
@@ -143,6 +140,15 @@ func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id str
 // are space-separated name and version strings resolved by the CLI before
 // reaching the daemon. The image is stored in containerd's content store
 // and unpacked into the snapshotter for the specified platform.
+//
+// Uses the containerd transfer service rather than the lower-level Pull or
+// Fetch APIs. The transfer service handles multi-platform index resolution
+// correctly, including index entries whose descriptors lack explicit platform
+// metadata (as seen in some Docker Official Images).
+//
+// If the image is already present and unpacked for the target platform the
+// pull is skipped, avoiding unnecessary registry requests (e.g. when
+// Docker Hub rate limits are in effect).
 func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (containerd.Image, error) {
 	named, err := dref.ParseNormalizedNamed(ref)
 	if err != nil {
@@ -155,20 +161,32 @@ func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (
 		return nil, err
 	}
 
+	// Fast path: reuse an image that is already unpacked locally.
+	if img, err := rt.resolveImage(ctx, fullRef, platform); err == nil {
+		unpacked, err := img.IsUnpacked(ctx, snapshotter)
+		if err == nil && unpacked {
+			slog.Info("image already unpacked, skipping pull", "ref", fullRef, "platform", platform)
+			return img, nil
+		}
+	}
+
 	slog.Info("pulling image", "ref", fullRef, "platform", platform)
 
-	image, err := rt.client.Pull(ctx, fullRef,
-		containerd.WithPlatformMatcher(platforms.Only(p)),
-		containerd.WithPullUnpack,
-		containerd.WithPullSnapshotter(snapshotter),
-	)
+	src, err := tregistry.NewOCIRegistry(ctx, fullRef)
 	if err != nil {
 		return nil, err
 	}
 
-	slog.Debug("image pulled", "ref", fullRef)
+	dest := timage.NewStore(fullRef,
+		timage.WithPlatforms(p),
+		timage.WithUnpack(p, snapshotter),
+	)
 
-	return image, nil
+	if err := rt.client.Transfer(ctx, src, dest); err != nil {
+		return nil, err
+	}
+
+	return rt.resolveImage(ctx, fullRef, platform)
 }
 
 // Transfers an OCI archive into containerd's content store server-side.
@@ -239,8 +257,6 @@ func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error {
 	if err := rt.transferImage(ctx, path, tag, platform); err != nil {
 		return crex.Wrap(ErrRuntime, err)
 	}
-
-	slog.Debug("image imported", "tag", tag)
 	return nil
 }
 
@@ -274,7 +290,6 @@ func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
-	slog.Debug("container started", "id", id, "image", tag)
 	return c, nil
 }
 
@@ -303,7 +318,6 @@ func (rt *Runtime) DestroyImage(ctx context.Context, tag string) error {
 		return crex.Wrap(ErrRuntime, err)
 	}
 
-	slog.Debug("image destroyed", "tag", tag)
 	return nil
 }
 

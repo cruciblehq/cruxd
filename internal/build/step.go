@@ -2,7 +2,6 @@ package build
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/cruciblehq/crex"
 	"github.com/cruciblehq/cruxd/internal/runtime"
@@ -55,7 +54,6 @@ func executeOperation(ctx context.Context, ctr *runtime.Container, step manifest
 
 	switch {
 	case step.Run != "":
-		slog.Debug("run", "command", step.Run, "shell", resolved.shell)
 		result, err := ctr.Exec(ctx, resolved.shell, step.Run, resolved.environ(), resolved.workdir)
 		if err != nil {
 			return err
