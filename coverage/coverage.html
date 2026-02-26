@@ -456,6 +456,7 @@ import (
         "github.com/cruciblehq/cruxd/internal/runtime"
         "github.com/cruciblehq/spec/manifest"
         "github.com/cruciblehq/spec/paths"
+        "github.com/cruciblehq/spec/protocol"
 )
 
 // Holds shared state for building all stages of a recipe.
@@ -625,7 +626,7 @@ func (r *recipe) destroyContainers(ctx context.Context) <span class="cov0" title
 // name is included when available for readability; otherwise, the 1-based stage
 // index is used.
 func (r *recipe) containerID(name string, index int, platform string) string <span class="cov0" title="0">{
-        resource := strings.ReplaceAll(r.resource, "/", "-")
+        resource := protocol.ContainerID(r.resource)
         slug := platformSlug(platform)
         if name != "" </span><span class="cov0" title="0">{
                 return fmt.Sprintf("%s-%s-stage-%s", resource, slug, name)
@@ -2292,7 +2293,13 @@ func (s *Server) handleImageStart(ctx context.Context, conn net.Conn, payload js
 
         <span class="cov0" title="0">tag := protocol.ImageTag(req.Ref, req.Version)
 
-        if _, err := s.runtime.StartFromTag(ctx, tag, req.ID); err != nil </span><span class="cov0" title="0">{
+        id := req.ID
+        if id == "" </span><span class="cov0" title="0">{
+                id = req.Ref
+        }</span>
+        <span class="cov0" title="0">id = protocol.ContainerID(id)
+
+        if _, err := s.runtime.StartFromTag(ctx, tag, id); err != nil </span><span class="cov0" title="0">{
                 s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
                 return
         }</span>
