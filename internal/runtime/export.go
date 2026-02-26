@@ -27,8 +27,12 @@ const exportFilename = "image.tar"
 // OCI archive.
 //
 // The diff between the container's snapshot and its parent is stored as a
-// new layer. If entrypoint is non-empty it is set on the image config.
-// The resulting image is written to output/image.tar.
+// new layer. If entrypoint is non-empty it is set on the image config. The
+// resulting image is written to output/image.tar. The stored image record
+// in containerd is never modified. The mutated manifest, config, and index
+// are written to the content store as ephemeral blobs and referenced only
+// during the export. A content lease protects these blobs from garbage
+// collection until the export completes.
 func (c *Container) Export(ctx context.Context, output string, entrypoint []string) error {
 	loaded, err := c.client.LoadContainer(ctx, c.id)
 	if err != nil {
@@ -45,19 +49,30 @@ func (c *Container) Export(ctx context.Context, output string, entrypoint []stri
 		return crex.Wrap(ErrRuntime, err)
 	}
 
-	if err := c.updateImage(ctx, info.Image, func(manifest *ocispec.Manifest, config *ocispec.Image) {
+	// Acquire a content lease so the ephemeral blobs written by
+	// buildExportTarget survive until the archive export finishes.
+	// Without a lease, containerd's GC scheduler may collect them
+	// between the write and the export.
+	ctx, done, err := c.client.WithLease(ctx)
+	if err != nil {
+		return crex.Wrap(ErrRuntime, err)
+	}
+	defer done(context.Background())
+
+	target, err := c.buildExportTarget(ctx, info.Image, func(manifest *ocispec.Manifest, config *ocispec.Image) {
 		manifest.Layers = append(manifest.Layers, layer)
 		config.RootFS.DiffIDs = append(config.RootFS.DiffIDs, diffID)
 		if len(entrypoint) > 0 {
 			config.Config.Entrypoint = entrypoint
 			config.Config.Cmd = nil
 		}
-	}); err != nil {
+	})
+	if err != nil {
 		return crex.Wrap(ErrRuntime, err)
 	}
 
 	exportPath := filepath.Join(output, exportFilename)
-	if err := c.exportImage(ctx, info.Image, exportPath); err != nil {
+	if err := c.exportImage(ctx, target, info.Image, exportPath); err != nil {
 		return crex.Wrap(ErrRuntime, err)
 	}
 
@@ -85,13 +100,16 @@ func (c *Container) snapshotDiff(ctx context.Context, info containers.Container)
 	return layer, diffID, nil
 }
 
-// Writes the named image to an OCI tar archive at the given path.
+// Writes the image to an OCI tar archive at the given path.
 //
-// When the image root is a multi-platform index, only the manifest matching
-// the container's platform is exported. This avoids reading blobs for other
-// platforms that may not be present in the content store (the pull only
-// fetches layers for the target platform).
-func (c *Container) exportImage(ctx context.Context, imageName, path string) error {
+// The target descriptor is exported directly via [archive.WithManifest]
+// rather than looking up the image by name. This allows the caller to
+// export ephemeral content (e.g., a mutated manifest with an extra layer)
+// without modifying the stored image record. The image name is attached
+// as the OCI reference annotation on the archive entry. When the target
+// is a multi-platform index, only the manifest matching the container's
+// platform is included.
+func (c *Container) exportImage(ctx context.Context, target ocispec.Descriptor, imageName, path string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -104,43 +122,37 @@ func (c *Container) exportImage(ctx context.Context, imageName, path string) err
 	}
 
 	return c.client.Export(ctx, f,
-		archive.WithImage(c.client.ImageService(), imageName),
+		archive.WithManifest(target, imageName),
 		archive.WithPlatform(platforms.Only(p)),
 	)
 }
 
-// Loads the image's manifest and config, applies the mutation, and writes
-// the updated blobs back to the content store.
+// Builds the export target descriptor by applying a mutation to the image's
+// manifest and config.
 //
-// When the image root is an OCI Image Index (multi-platform), the index is
-// walked to locate the manifest matching the container's platform. The
-// updated manifest and config are written back, and the index is updated
-// with the new manifest descriptor.
-func (c *Container) updateImage(ctx context.Context, imageName string, mutate func(*ocispec.Manifest, *ocispec.Image)) error {
+// The mutated manifest, config, and (when the root is an index) a new
+// single-entry index are written to the content store as ephemeral blobs.
+// The stored image record is never modified, so subsequent builds always
+// see the original, clean image pulled from the registry.
+func (c *Container) buildExportTarget(ctx context.Context, imageName string, mutate func(*ocispec.Manifest, *ocispec.Image)) (ocispec.Descriptor, error) {
 	is := c.client.ImageService()
 
 	img, err := is.Get(ctx, imageName)
 	if err != nil {
-		return err
+		return ocispec.Descriptor{}, err
 	}
 
 	target, index, manifestIdx, err := c.resolveManifestDescriptor(ctx, img.Target, imageName)
 	if err != nil {
-		return err
+		return ocispec.Descriptor{}, err
 	}
 
 	newManifestDesc, err := c.mutateManifest(ctx, target, imageName, mutate)
 	if err != nil {
-		return err
+		return ocispec.Descriptor{}, err
 	}
 
-	img.Target, err = c.buildImageTarget(ctx, img.Target, index, manifestIdx, newManifestDesc, imageName)
-	if err != nil {
-		return err
-	}
-
-	_, err = is.Update(ctx, img, "target")
-	return err
+	return c.buildImageTarget(ctx, img.Target, index, manifestIdx, newManifestDesc, imageName)
 }
 
 // Resolves the image root descriptor to a platform-specific manifest.
