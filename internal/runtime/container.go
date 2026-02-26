@@ -108,20 +108,46 @@ func (c *Container) Destroy(ctx context.Context) {
 	}
 }
 
-// Creates the containerd container with the standard build configuration.
-func (c *Container) create(ctx context.Context, image containerd.Image) (containerd.Container, error) {
+// Starts a new task on an existing container.
+//
+// Any leftover task from a previous run is cleaned up first. The container
+// must already exist; use [Container.create] for initial creation.
+func (c *Container) Start(ctx context.Context) error {
+	ctr, err := c.client.LoadContainer(ctx, c.id)
+	if err != nil {
+		return err
+	}
+
+	// Delete any stale task left over from a prior run.
+	if task, err := ctr.Task(ctx, nil); err == nil {
+		task.Kill(ctx, syscall.SIGKILL)
+		task.Delete(ctx, containerd.WithProcessKill)
+	}
+
+	return c.startTask(ctx, ctr)
+}
+
+// Creates the containerd container with the standard configuration.
+//
+// Spec options are applied sequentially. Each one mutates the OCI spec in
+// place, so extraOpts appended after the base options can override values
+// set by WithImageConfig (last writer wins). Build containers use this to
+// replace the image entrypoint with "sleep infinity".
+func (c *Container) create(ctx context.Context, image containerd.Image, extraOpts ...oci.SpecOpts) (containerd.Container, error) {
+	specOpts := []oci.SpecOpts{
+		oci.WithDefaultSpecForPlatform(c.platform),
+		oci.WithImageConfig(image),
+		oci.WithHostNamespace(specs.NetworkNamespace),
+		oci.WithHostResolvconf,
+	}
+	specOpts = append(specOpts, extraOpts...)
+
 	return c.client.NewContainer(ctx, c.id,
 		containerd.WithImage(image),
 		containerd.WithSnapshotter(snapshotter),
 		containerd.WithNewSnapshot(c.id, image),
 		containerd.WithRuntime(ociRuntime, nil),
-		containerd.WithNewSpec(
-			oci.WithDefaultSpecForPlatform(c.platform),
-			oci.WithImageConfig(image),
-			oci.WithHostNamespace(specs.NetworkNamespace),
-			oci.WithHostResolvconf,
-			oci.WithProcessArgs("sleep", "infinity"),
-		),
+		containerd.WithNewSpec(specOpts...),
 	)
 }
 

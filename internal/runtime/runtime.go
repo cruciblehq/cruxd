@@ -14,9 +14,11 @@ import (
 	"github.com/containerd/containerd/v2/core/transfer/archive"
 	timage "github.com/containerd/containerd/v2/core/transfer/image"
 	tregistry "github.com/containerd/containerd/v2/core/transfer/registry"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/cruciblehq/crex"
+	"github.com/cruciblehq/spec/protocol"
 	dref "github.com/distribution/reference"
 )
 
@@ -84,7 +86,7 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
-	ctr, err := c.create(ctx, image)
+	ctr, err := c.create(ctx, image, oci.WithProcessArgs("sleep", "infinity"))
 	if err != nil {
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
@@ -119,7 +121,7 @@ func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id str
 
 	c.remove(ctx)
 
-	ctr, err := c.create(ctx, image)
+	ctr, err := c.create(ctx, image, oci.WithProcessArgs("sleep", "infinity"))
 	if err != nil {
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
@@ -262,8 +264,10 @@ func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error {
 
 // Starts a container from a previously imported image tag.
 //
-// Any stale container with the same ID is cleaned up first. The container
-// runs detached with a long-running task.
+// The operation is idempotent: if the container is already running it is
+// left untouched; if the container exists but has no active task a new
+// task is started on the existing snapshot; otherwise a new container is
+// created from the image.
 func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container, error) {
 	platform := defaultPlatform()
 
@@ -273,24 +277,39 @@ func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container
 		platform: platform,
 	}
 
-	c.remove(ctx)
-
-	image, err := rt.resolveImage(ctx, tag, platform)
+	status, err := c.Status(ctx)
 	if err != nil {
 		return nil, crex.Wrap(ErrRuntime, err)
 	}
 
-	ctr, err := c.create(ctx, image)
-	if err != nil {
-		return nil, crex.Wrap(ErrRuntime, err)
-	}
+	switch status {
+	case protocol.ContainerRunning:
+		return c, nil
 
-	if err := c.startTask(ctx, ctr); err != nil {
-		ctr.Delete(ctx, containerd.WithSnapshotCleanup)
-		return nil, crex.Wrap(ErrRuntime, err)
-	}
+	case protocol.ContainerStopped:
+		if err := c.Start(ctx); err != nil {
+			return nil, crex.Wrap(ErrRuntime, err)
+		}
+		return c, nil
 
-	return c, nil
+	default:
+		image, err := rt.resolveImage(ctx, tag, platform)
+		if err != nil {
+			return nil, crex.Wrap(ErrRuntime, err)
+		}
+
+		ctr, err := c.create(ctx, image)
+		if err != nil {
+			return nil, crex.Wrap(ErrRuntime, err)
+		}
+
+		if err := c.startTask(ctx, ctr); err != nil {
+			ctr.Delete(ctx, containerd.WithSnapshotCleanup)
+			return nil, crex.Wrap(ErrRuntime, err)
+		}
+
+		return c, nil
+	}
 }
 
 // Removes an image and all containers created from it.
