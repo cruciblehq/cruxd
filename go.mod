@@ -63,5 +63,3 @@ require (
 	github.com/cruciblehq/crex v0.1.0
 	golang.org/x/sys v0.38.0 // indirect
 )
-
-replace github.com/cruciblehq/spec => ../spec
