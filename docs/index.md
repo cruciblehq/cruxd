@@ -858,13 +858,14 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(c \*Container\) MkdirAll\(ctx context.Context, path string\) error](<#Container.MkdirAll>)
   - [func \(c \*Container\) Status\(ctx context.Context\) \(protocol.ContainerState, error\)](<#Container.Status>)
   - [func \(c \*Container\) Stop\(ctx context.Context\) error](<#Container.Stop>)
+  - [func \(c \*Container\) buildExportTarget\(ctx context.Context, imageName string, mutate func\(\*ocispec.Manifest, \*ocispec.Image\)\) \(ocispec.Descriptor, error\)](<#Container.buildExportTarget>)
   - [func \(c \*Container\) buildImageTarget\(ctx context.Context, root ocispec.Descriptor, index \*ocispec.Index, manifestIdx int, newManifest ocispec.Descriptor, imageName string\) \(ocispec.Descriptor, error\)](<#Container.buildImageTarget>)
   - [func \(c \*Container\) buildProcessSpec\(ctx context.Context, env \[\]string, workdir string, args ...string\) \(\*specs.Process, error\)](<#Container.buildProcessSpec>)
   - [func \(c \*Container\) configPlatform\(ctx context.Context, desc ocispec.Descriptor\) \(ocispec.Platform, bool\)](<#Container.configPlatform>)
   - [func \(c \*Container\) create\(ctx context.Context, image containerd.Image\) \(containerd.Container, error\)](<#Container.create>)
   - [func \(c \*Container\) execCommand\(ctx context.Context, stdin io.Reader, stdout io.Writer, env \[\]string, workdir string, args ...string\) \(int, string, error\)](<#Container.execCommand>)
   - [func \(c \*Container\) execProcess\(ctx context.Context, pspec \*specs.Process, stdin io.Reader, stdout, stderr io.Writer\) \(int, error\)](<#Container.execProcess>)
-  - [func \(c \*Container\) exportImage\(ctx context.Context, imageName, path string\) error](<#Container.exportImage>)
+  - [func \(c \*Container\) exportImage\(ctx context.Context, target ocispec.Descriptor, imageName, path string\) error](<#Container.exportImage>)
   - [func \(c \*Container\) loadTask\(ctx context.Context\) \(containerd.Task, error\)](<#Container.loadTask>)
   - [func \(c \*Container\) matchManifest\(ctx context.Context, idx ocispec.Index, matcher platforms.MatchComparer\) \(int, bool\)](<#Container.matchManifest>)
   - [func \(c \*Container\) mustExec\(ctx context.Context, desc string, stdin io.Reader, stdout io.Writer, args ...string\) error](<#Container.mustExec>)
@@ -876,7 +877,6 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(c \*Container\) resolveManifestDescriptor\(ctx context.Context, root ocispec.Descriptor, imageName string\) \(ocispec.Descriptor, \*ocispec.Index, int, error\)](<#Container.resolveManifestDescriptor>)
   - [func \(c \*Container\) snapshotDiff\(ctx context.Context, info containers.Container\) \(ocispec.Descriptor, digest.Digest, error\)](<#Container.snapshotDiff>)
   - [func \(c \*Container\) startTask\(ctx context.Context, ctr containerd.Container\) error](<#Container.startTask>)
-  - [func \(c \*Container\) updateImage\(ctx context.Context, imageName string, mutate func\(\*ocispec.Manifest, \*ocispec.Image\)\) error](<#Container.updateImage>)
   - [func \(c \*Container\) writeBlob\(ctx context.Context, mediaType string, v any, ref string, opts ...content.Opt\) \(ocispec.Descriptor, error\)](<#Container.writeBlob>)
 - [type ExecResult](<#ExecResult>)
 - [type Runtime](<#Runtime>)
@@ -1081,7 +1081,7 @@ func (c *Container) Export(ctx context.Context, output string, entrypoint []stri
 
 Commits the container's filesystem changes and exports the result as an OCI archive.
 
-The diff between the container's snapshot and its parent is stored as a new layer. If entrypoint is non\-empty it is set on the image config. The resulting image is written to output/image.tar.
+The diff between the container's snapshot and its parent is stored as a new layer. If entrypoint is non\-empty it is set on the image config. The resulting image is written to output/image.tar. The stored image record in containerd is never modified. The mutated manifest, config, and index are written to the content store as ephemeral blobs and referenced only during the export. A content lease protects these blobs from garbage collection until the export completes.
 
 <a name="Container.MkdirAll"></a>
 ### func \(\*Container\) MkdirAll
@@ -1113,6 +1113,17 @@ func (c *Container) Stop(ctx context.Context) error
 Stops the container's task.
 
 The running task is killed and deleted. The container metadata is preserved. Calling Stop on an already\-stopped container is not an error.
+
+<a name="Container.buildExportTarget"></a>
+### func \(\*Container\) buildExportTarget
+
+```go
+func (c *Container) buildExportTarget(ctx context.Context, imageName string, mutate func(*ocispec.Manifest, *ocispec.Image)) (ocispec.Descriptor, error)
+```
+
+Builds the export target descriptor by applying a mutation to the image's manifest and config.
+
+The mutated manifest, config, and \(when the root is an index\) a new single\-entry index are written to the content store as ephemeral blobs. The stored image record is never modified, so subsequent builds always see the original, clean image pulled from the registry.
 
 <a name="Container.buildImageTarget"></a>
 ### func \(\*Container\) buildImageTarget
@@ -1182,12 +1193,12 @@ When stdin is provided, the container's stdin is explicitly closed after the rea
 ### func \(\*Container\) exportImage
 
 ```go
-func (c *Container) exportImage(ctx context.Context, imageName, path string) error
+func (c *Container) exportImage(ctx context.Context, target ocispec.Descriptor, imageName, path string) error
 ```
 
-Writes the named image to an OCI tar archive at the given path.
+Writes the image to an OCI tar archive at the given path.
 
-When the image root is a multi\-platform index, only the manifest matching the container's platform is exported. This avoids reading blobs for other platforms that may not be present in the content store \(the pull only fetches layers for the target platform\).
+The target descriptor is exported directly via \[archive.WithManifest\] rather than looking up the image by name. This allows the caller to export ephemeral content \(e.g., a mutated manifest with an extra layer\) without modifying the stored image record. The image name is attached as the OCI reference annotation on the archive entry. When the target is a multi\-platform index, only the manifest matching the container's platform is included.
 
 <a name="Container.loadTask"></a>
 ### func \(\*Container\) loadTask
@@ -1295,17 +1306,6 @@ func (c *Container) startTask(ctx context.Context, ctr containerd.Container) err
 ```
 
 Starts the container's long\-running task with no attached IO.
-
-<a name="Container.updateImage"></a>
-### func \(\*Container\) updateImage
-
-```go
-func (c *Container) updateImage(ctx context.Context, imageName string, mutate func(*ocispec.Manifest, *ocispec.Image)) error
-```
-
-Loads the image's manifest and config, applies the mutation, and writes the updated blobs back to the content store.
-
-When the image root is an OCI Image Index \(multi\-platform\), the index is walked to locate the manifest matching the container's platform. The updated manifest and config are written back, and the index is updated with the new manifest descriptor.
 
 <a name="Container.writeBlob"></a>
 ### func \(\*Container\) writeBlob
