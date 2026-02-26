@@ -59,7 +59,7 @@
 				
 				<option value="file1">github.com/cruciblehq/cruxd/internal/build/build.go (0.0%)</option>
 				
-				<option value="file2">github.com/cruciblehq/cruxd/internal/build/copy.go (16.3%)</option>
+				<option value="file2">github.com/cruciblehq/cruxd/internal/build/copy.go (16.7%)</option>
 				
 				<option value="file3">github.com/cruciblehq/cruxd/internal/build/recipe.go (0.0%)</option>
 				
@@ -83,9 +83,9 @@
 				
 				<option value="file13">github.com/cruciblehq/cruxd/internal/runtime/exec.go (13.8%)</option>
 				
-				<option value="file14">github.com/cruciblehq/cruxd/internal/runtime/export.go (4.2%)</option>
+				<option value="file14">github.com/cruciblehq/cruxd/internal/runtime/export.go (3.7%)</option>
 				
-				<option value="file15">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (3.0%)</option>
+				<option value="file15">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (2.9%)</option>
 				
 				<option value="file16">github.com/cruciblehq/cruxd/internal/server/handlers.go (0.0%)</option>
 				
@@ -227,7 +227,6 @@ import (
         "archive/tar"
         "context"
         "io"
-        "log/slog"
         "os"
         "path/filepath"
         "strings"
@@ -275,9 +274,7 @@ func executeHostCopy(ctx context.Context, ctr *runtime.Container, src, dest, bui
                 return crex.Wrap(ErrCopy, err)
         }</span>
 
-        <span class="cov0" title="0">slog.Debug("copy", "src", src, "dest", dest, "dir", info.IsDir())
-
-        pr, pw := io.Pipe()
+        <span class="cov0" title="0">pr, pw := io.Pipe()
 
         go func() </span><span class="cov0" title="0">{
                 tw := tar.NewWriter(pw)
@@ -310,9 +307,7 @@ func executeStageCopy(ctx context.Context, ctr *runtime.Container, stages map[st
                 return crex.Wrapf(ErrCopy, "unknown stage %q", stage)
         }</span>
 
-        <span class="cov0" title="0">slog.Debug("cross-stage copy", "stage", stage, "src", path, "dest", dest)
-
-        pr, pw := io.Pipe()
+        <span class="cov0" title="0">pr, pw := io.Pipe()
 
         errc := make(chan error, 1)
         go func() </span><span class="cov0" title="0">{
@@ -671,7 +666,6 @@ func stageLabel(name string, index int) string <span class="cov0" title="0">{
 
 import (
         "context"
-        "log/slog"
 
         "github.com/cruciblehq/crex"
         "github.com/cruciblehq/cruxd/internal/runtime"
@@ -724,7 +718,6 @@ func executeOperation(ctx context.Context, ctr *runtime.Container, step manifest
 
         <span class="cov0" title="0">switch </span>{
         case step.Run != "":<span class="cov0" title="0">
-                slog.Debug("run", "command", step.Run, "shell", resolved.shell)
                 result, err := ctr.Exec(ctx, resolved.shell, step.Run, resolved.environ(), resolved.workdir)
                 if err != nil </span><span class="cov0" title="0">{
                         return err
@@ -1591,6 +1584,11 @@ func (c *Container) snapshotDiff(ctx context.Context, info containers.Container)
 }
 
 // Writes the named image to an OCI tar archive at the given path.
+//
+// When the image root is a multi-platform index, only the manifest matching
+// the container's platform is exported. This avoids reading blobs for other
+// platforms that may not be present in the content store (the pull only
+// fetches layers for the target platform).
 func (c *Container) exportImage(ctx context.Context, imageName, path string) error <span class="cov0" title="0">{
         f, err := os.Create(path)
         if err != nil </span><span class="cov0" title="0">{
@@ -1598,7 +1596,15 @@ func (c *Container) exportImage(ctx context.Context, imageName, path string) err
         }</span>
         <span class="cov0" title="0">defer f.Close()
 
-        return c.client.Export(ctx, f, archive.WithImage(c.client.ImageService(), imageName))</span>
+        p, err := platforms.Parse(c.platform)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">return c.client.Export(ctx, f,
+                archive.WithImage(c.client.ImageService(), imageName),
+                archive.WithPlatform(platforms.Only(p)),
+        )</span>
 }
 
 // Loads the image's manifest and config, applies the mutation, and writes
@@ -1639,8 +1645,13 @@ func (c *Container) updateImage(ctx context.Context, imageName string, mutate fu
 //
 // If the root is an OCI Image Index, the index is read and walked to find
 // the manifest matching the container's platform. Returns the manifest
-// descriptor, the index (nil when the root is already a manifest), and the
+// descriptor, the index (nil when the root is al+,,ready a manifest), and the
 // position of the manifest within the index.
+//
+// Some registries (notably Docker Hub) serve index entries without explicit
+// platform metadata. When a descriptor lacks a platform field, the manifest
+// and its config are read to extract the platform from the image config, the
+// same fallback that containerd's images.Manifest uses internally.
 func (c *Container) resolveManifestDescriptor(ctx context.Context, root ocispec.Descriptor, imageName string) (ocispec.Descriptor, *ocispec.Index, int, error) <span class="cov0" title="0">{
         if !images.IsIndexType(root.MediaType) </span><span class="cov0" title="0">{
                 return root, nil, 0, nil
@@ -1655,19 +1666,59 @@ func (c *Container) resolveManifestDescriptor(ctx context.Context, root ocispec.
         if err != nil </span><span class="cov0" title="0">{
                 return ocispec.Descriptor{}, nil, 0, err
         }</span>
-        <span class="cov0" title="0">matcher := platforms.OnlyStrict(p)
 
-        for i, m := range idx.Manifests </span><span class="cov0" title="0">{
-                if m.Platform != nil &amp;&amp; matcher.Match(*m.Platform) </span><span class="cov0" title="0">{
-                        return m, &amp;idx, i, nil
-                }</span>
-        }
+        <span class="cov0" title="0">i, ok := c.matchManifest(ctx, idx, platforms.OnlyStrict(p))
+        if ok </span><span class="cov0" title="0">{
+                return idx.Manifests[i], &amp;idx, i, nil
+        }</span>
 
-        // Fall back to the first manifest in the index.
         <span class="cov0" title="0">if len(idx.Manifests) == 0 </span><span class="cov0" title="0">{
                 return ocispec.Descriptor{}, nil, 0, crex.Wrapf(ErrEmptyIndex, "%s", imageName)
         }</span>
         <span class="cov0" title="0">return idx.Manifests[0], &amp;idx, 0, nil</span>
+}
+
+// Searches the index for a manifest matching the given platform.
+//
+// Descriptors with an explicit platform field are checked first. If none
+// match, descriptors without a platform field are probed by reading the
+// image config to discover the platform (the "ConfigPlatform" fallback).
+// Returns the index position and true when a match is found.
+func (c *Container) matchManifest(ctx context.Context, idx ocispec.Index, matcher platforms.MatchComparer) (int, bool) <span class="cov0" title="0">{
+        for i, m := range idx.Manifests </span><span class="cov0" title="0">{
+                if m.Platform != nil &amp;&amp; matcher.Match(*m.Platform) </span><span class="cov0" title="0">{
+                        return i, true
+                }</span>
+        }
+        <span class="cov0" title="0">for i, m := range idx.Manifests </span><span class="cov0" title="0">{
+                if m.Platform != nil || !images.IsManifestType(m.MediaType) </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+                <span class="cov0" title="0">if p, ok := c.configPlatform(ctx, m); ok &amp;&amp; matcher.Match(p) </span><span class="cov0" title="0">{
+                        return i, true
+                }</span>
+        }
+        <span class="cov0" title="0">return 0, false</span>
+}
+
+// Reads the image config referenced by a manifest descriptor and returns the
+// platform declared in the config.
+//
+// Returns false when the config cannot be read.
+func (c *Container) configPlatform(ctx context.Context, desc ocispec.Descriptor) (ocispec.Platform, bool) <span class="cov0" title="0">{
+        manifest, err := c.readManifest(ctx, desc)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Platform{}, false
+        }</span>
+        <span class="cov0" title="0">config, err := c.readConfig(ctx, manifest.Config)
+        if err != nil </span><span class="cov0" title="0">{
+                return ocispec.Platform{}, false
+        }</span>
+        <span class="cov0" title="0">return ocispec.Platform{
+                OS:           config.OS,
+                Architecture: config.Architecture,
+                Variant:      config.Variant,
+        }, true</span>
 }
 
 // Reads the manifest and config, applies the mutation, and writes the
@@ -1696,15 +1747,16 @@ func (c *Container) mutateManifest(ctx context.Context, target ocispec.Descripto
 
 // Produces the final image target descriptor after a manifest update.
 //
-// When the image was resolved through an index, the index entry is replaced
-// with the new manifest descriptor and the index is written back. Otherwise
-// the new manifest descriptor is returned directly.
+// When the image was resolved through an index, a new single-entry index is
+// written containing only the updated manifest. Entries for other platforms
+// are dropped because their layer blobs are typically not present in the
+// content store (only the target platform's layers are fetched).
 func (c *Container) buildImageTarget(ctx context.Context, root ocispec.Descriptor, index *ocispec.Index, manifestIdx int, newManifest ocispec.Descriptor, imageName string) (ocispec.Descriptor, error) <span class="cov0" title="0">{
         if index == nil </span><span class="cov0" title="0">{
                 return newManifest, nil
         }</span>
 
-        <span class="cov0" title="0">index.Manifests[manifestIdx] = newManifest
+        <span class="cov0" title="0">index.Manifests = []ocispec.Descriptor{newManifest}
         return c.writeBlob(ctx, root.MediaType, index, imageName+"-index", content.WithLabels(indexGCLabels(*index)))</span>
 }
 
@@ -1807,6 +1859,7 @@ import (
         containerd "github.com/containerd/containerd/v2/client"
         "github.com/containerd/containerd/v2/core/transfer/archive"
         timage "github.com/containerd/containerd/v2/core/transfer/image"
+        tregistry "github.com/containerd/containerd/v2/core/transfer/registry"
         "github.com/containerd/errdefs"
         "github.com/containerd/platforms"
         "github.com/cruciblehq/crex"
@@ -1887,9 +1940,7 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
                 return nil, crex.Wrap(ErrRuntime, err)
         }</span>
 
-        <span class="cov0" title="0">slog.Debug("container started", "id", id, "image", tag)
-
-        return c, nil</span>
+        <span class="cov0" title="0">return c, nil</span>
 }
 
 // Pulls a remote OCI image and starts a container from it.
@@ -1924,9 +1975,7 @@ func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id str
                 return nil, crex.Wrap(ErrRuntime, err)
         }</span>
 
-        <span class="cov0" title="0">slog.Debug("container started", "id", id, "ref", ref)
-
-        return c, nil</span>
+        <span class="cov0" title="0">return c, nil</span>
 }
 
 // Pulls a remote OCI image from a container registry.
@@ -1937,6 +1986,15 @@ func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id str
 // are space-separated name and version strings resolved by the CLI before
 // reaching the daemon. The image is stored in containerd's content store
 // and unpacked into the snapshotter for the specified platform.
+//
+// Uses the containerd transfer service rather than the lower-level Pull or
+// Fetch APIs. The transfer service handles multi-platform index resolution
+// correctly, including index entries whose descriptors lack explicit platform
+// metadata (as seen in some Docker Official Images).
+//
+// If the image is already present and unpacked for the target platform the
+// pull is skipped, avoiding unnecessary registry requests (e.g. when
+// Docker Hub rate limits are in effect).
 func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (containerd.Image, error) <span class="cov0" title="0">{
         named, err := dref.ParseNormalizedNamed(ref)
         if err != nil </span><span class="cov0" title="0">{
@@ -1949,20 +2007,32 @@ func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (
                 return nil, err
         }</span>
 
+        // Fast path: reuse an image that is already unpacked locally.
+        <span class="cov0" title="0">if img, err := rt.resolveImage(ctx, fullRef, platform); err == nil </span><span class="cov0" title="0">{
+                unpacked, err := img.IsUnpacked(ctx, snapshotter)
+                if err == nil &amp;&amp; unpacked </span><span class="cov0" title="0">{
+                        slog.Info("image already unpacked, skipping pull", "ref", fullRef, "platform", platform)
+                        return img, nil
+                }</span>
+        }
+
         <span class="cov0" title="0">slog.Info("pulling image", "ref", fullRef, "platform", platform)
 
-        image, err := rt.client.Pull(ctx, fullRef,
-                containerd.WithPlatformMatcher(platforms.Only(p)),
-                containerd.WithPullUnpack,
-                containerd.WithPullSnapshotter(snapshotter),
-        )
+        src, err := tregistry.NewOCIRegistry(ctx, fullRef)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, err
         }</span>
 
-        <span class="cov0" title="0">slog.Debug("image pulled", "ref", fullRef)
+        <span class="cov0" title="0">dest := timage.NewStore(fullRef,
+                timage.WithPlatforms(p),
+                timage.WithUnpack(p, snapshotter),
+        )
 
-        return image, nil</span>
+        if err := rt.client.Transfer(ctx, src, dest); err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">return rt.resolveImage(ctx, fullRef, platform)</span>
 }
 
 // Transfers an OCI archive into containerd's content store server-side.
@@ -2033,9 +2103,7 @@ func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error <spa
         if err := rt.transferImage(ctx, path, tag, platform); err != nil </span><span class="cov0" title="0">{
                 return crex.Wrap(ErrRuntime, err)
         }</span>
-
-        <span class="cov0" title="0">slog.Debug("image imported", "tag", tag)
-        return nil</span>
+        <span class="cov0" title="0">return nil</span>
 }
 
 // Starts a container from a previously imported image tag.
@@ -2068,8 +2136,7 @@ func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container
                 return nil, crex.Wrap(ErrRuntime, err)
         }</span>
 
-        <span class="cov0" title="0">slog.Debug("container started", "id", id, "image", tag)
-        return c, nil</span>
+        <span class="cov0" title="0">return c, nil</span>
 }
 
 // Removes an image and all containers created from it.
@@ -2097,8 +2164,7 @@ func (rt *Runtime) DestroyImage(ctx context.Context, tag string) error <span cla
                 return crex.Wrap(ErrRuntime, err)
         }</span>
 
-        <span class="cov0" title="0">slog.Debug("image destroyed", "tag", tag)
-        return nil</span>
+        <span class="cov0" title="0">return nil</span>
 }
 
 // Returns a handle for an existing container.

@@ -860,11 +860,13 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(c \*Container\) Stop\(ctx context.Context\) error](<#Container.Stop>)
   - [func \(c \*Container\) buildImageTarget\(ctx context.Context, root ocispec.Descriptor, index \*ocispec.Index, manifestIdx int, newManifest ocispec.Descriptor, imageName string\) \(ocispec.Descriptor, error\)](<#Container.buildImageTarget>)
   - [func \(c \*Container\) buildProcessSpec\(ctx context.Context, env \[\]string, workdir string, args ...string\) \(\*specs.Process, error\)](<#Container.buildProcessSpec>)
+  - [func \(c \*Container\) configPlatform\(ctx context.Context, desc ocispec.Descriptor\) \(ocispec.Platform, bool\)](<#Container.configPlatform>)
   - [func \(c \*Container\) create\(ctx context.Context, image containerd.Image\) \(containerd.Container, error\)](<#Container.create>)
   - [func \(c \*Container\) execCommand\(ctx context.Context, stdin io.Reader, stdout io.Writer, env \[\]string, workdir string, args ...string\) \(int, string, error\)](<#Container.execCommand>)
   - [func \(c \*Container\) execProcess\(ctx context.Context, pspec \*specs.Process, stdin io.Reader, stdout, stderr io.Writer\) \(int, error\)](<#Container.execProcess>)
   - [func \(c \*Container\) exportImage\(ctx context.Context, imageName, path string\) error](<#Container.exportImage>)
   - [func \(c \*Container\) loadTask\(ctx context.Context\) \(containerd.Task, error\)](<#Container.loadTask>)
+  - [func \(c \*Container\) matchManifest\(ctx context.Context, idx ocispec.Index, matcher platforms.MatchComparer\) \(int, bool\)](<#Container.matchManifest>)
   - [func \(c \*Container\) mustExec\(ctx context.Context, desc string, stdin io.Reader, stdout io.Writer, args ...string\) error](<#Container.mustExec>)
   - [func \(c \*Container\) mutateManifest\(ctx context.Context, target ocispec.Descriptor, imageName string, mutate func\(\*ocispec.Manifest, \*ocispec.Image\)\) \(ocispec.Descriptor, error\)](<#Container.mutateManifest>)
   - [func \(c \*Container\) readConfig\(ctx context.Context, desc ocispec.Descriptor\) \(ocispec.Image, error\)](<#Container.readConfig>)
@@ -1121,7 +1123,7 @@ func (c *Container) buildImageTarget(ctx context.Context, root ocispec.Descripto
 
 Produces the final image target descriptor after a manifest update.
 
-When the image was resolved through an index, the index entry is replaced with the new manifest descriptor and the index is written back. Otherwise the new manifest descriptor is returned directly.
+When the image was resolved through an index, a new single\-entry index is written containing only the updated manifest. Entries for other platforms are dropped because their layer blobs are typically not present in the content store \(only the target platform's layers are fetched\).
 
 <a name="Container.buildProcessSpec"></a>
 ### func \(\*Container\) buildProcessSpec
@@ -1133,6 +1135,17 @@ func (c *Container) buildProcessSpec(ctx context.Context, env []string, workdir 
 Builds an OCI process spec for running a command inside the container.
 
 A process spec defines everything needed to start a process: the command and arguments, environment variables, working directory, and terminal mode. The base values are copied from the container's own OCI spec, then env and workdir are overridden if provided.
+
+<a name="Container.configPlatform"></a>
+### func \(\*Container\) configPlatform
+
+```go
+func (c *Container) configPlatform(ctx context.Context, desc ocispec.Descriptor) (ocispec.Platform, bool)
+```
+
+Reads the image config referenced by a manifest descriptor and returns the platform declared in the config.
+
+Returns false when the config cannot be read.
 
 <a name="Container.create"></a>
 ### func \(\*Container\) create
@@ -1174,6 +1187,8 @@ func (c *Container) exportImage(ctx context.Context, imageName, path string) err
 
 Writes the named image to an OCI tar archive at the given path.
 
+When the image root is a multi\-platform index, only the manifest matching the container's platform is exported. This avoids reading blobs for other platforms that may not be present in the content store \(the pull only fetches layers for the target platform\).
+
 <a name="Container.loadTask"></a>
 ### func \(\*Container\) loadTask
 
@@ -1182,6 +1197,17 @@ func (c *Container) loadTask(ctx context.Context) (containerd.Task, error)
 ```
 
 Loads the container's running task.
+
+<a name="Container.matchManifest"></a>
+### func \(\*Container\) matchManifest
+
+```go
+func (c *Container) matchManifest(ctx context.Context, idx ocispec.Index, matcher platforms.MatchComparer) (int, bool)
+```
+
+Searches the index for a manifest matching the given platform.
+
+Descriptors with an explicit platform field are checked first. If none match, descriptors without a platform field are probed by reading the image config to discover the platform \(the "ConfigPlatform" fallback\). Returns the index position and true when a match is found.
 
 <a name="Container.mustExec"></a>
 ### func \(\*Container\) mustExec
@@ -1248,7 +1274,9 @@ func (c *Container) resolveManifestDescriptor(ctx context.Context, root ocispec.
 
 Resolves the image root descriptor to a platform\-specific manifest.
 
-If the root is an OCI Image Index, the index is read and walked to find the manifest matching the container's platform. Returns the manifest descriptor, the index \(nil when the root is already a manifest\), and the position of the manifest within the index.
+If the root is an OCI Image Index, the index is read and walked to find the manifest matching the container's platform. Returns the manifest descriptor, the index \(nil when the root is al\+,,ready a manifest\), and the position of the manifest within the index.
+
+Some registries \(notably Docker Hub\) serve index entries without explicit platform metadata. When a descriptor lacks a platform field, the manifest and its config are read to extract the platform from the image config, the same fallback that containerd's images.Manifest uses internally.
 
 <a name="Container.snapshotDiff"></a>
 ### func \(\*Container\) snapshotDiff
@@ -1408,6 +1436,10 @@ func (rt *Runtime) pullImage(ctx context.Context, ref string, platform string) (
 Pulls a remote OCI image from a container registry.
 
 The reference is a single\-token image name. Bare names like "alpine:3.21" are normalized to "docker.io/library/alpine:3.21", and untagged names receive the "latest" tag. This differs from Crucible references, which are space\-separated name and version strings resolved by the CLI before reaching the daemon. The image is stored in containerd's content store and unpacked into the snapshotter for the specified platform.
+
+Uses the containerd transfer service rather than the lower\-level Pull or Fetch APIs. The transfer service handles multi\-platform index resolution correctly, including index entries whose descriptors lack explicit platform metadata \(as seen in some Docker Official Images\).
+
+If the image is already present and unpacked for the target platform the pull is skipped, avoiding unnecessary registry requests \(e.g. when Docker Hub rate limits are in effect\).
 
 <a name="Runtime.resolveImage"></a>
 ### func \(\*Runtime\) resolveImage
