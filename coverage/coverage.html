@@ -85,7 +85,7 @@
 				
 				<option value="file14">github.com/cruciblehq/cruxd/internal/runtime/export.go (3.6%)</option>
 				
-				<option value="file15">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (2.9%)</option>
+				<option value="file15">github.com/cruciblehq/cruxd/internal/runtime/runtime.go (2.8%)</option>
 				
 				<option value="file16">github.com/cruciblehq/cruxd/internal/server/handlers.go (0.0%)</option>
 				
@@ -1127,20 +1127,46 @@ func (c *Container) Destroy(ctx context.Context) <span class="cov0" title="0">{
         }</span>
 }
 
-// Creates the containerd container with the standard build configuration.
-func (c *Container) create(ctx context.Context, image containerd.Image) (containerd.Container, error) <span class="cov0" title="0">{
+// Starts a new task on an existing container.
+//
+// Any leftover task from a previous run is cleaned up first. The container
+// must already exist; use [Container.create] for initial creation.
+func (c *Container) Start(ctx context.Context) error <span class="cov0" title="0">{
+        ctr, err := c.client.LoadContainer(ctx, c.id)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Delete any stale task left over from a prior run.
+        <span class="cov0" title="0">if task, err := ctr.Task(ctx, nil); err == nil </span><span class="cov0" title="0">{
+                task.Kill(ctx, syscall.SIGKILL)
+                task.Delete(ctx, containerd.WithProcessKill)
+        }</span>
+
+        <span class="cov0" title="0">return c.startTask(ctx, ctr)</span>
+}
+
+// Creates the containerd container with the standard configuration.
+//
+// Spec options are applied sequentially. Each one mutates the OCI spec in
+// place, so extraOpts appended after the base options can override values
+// set by WithImageConfig (last writer wins). Build containers use this to
+// replace the image entrypoint with "sleep infinity".
+func (c *Container) create(ctx context.Context, image containerd.Image, extraOpts ...oci.SpecOpts) (containerd.Container, error) <span class="cov0" title="0">{
+        specOpts := []oci.SpecOpts{
+                oci.WithDefaultSpecForPlatform(c.platform),
+                oci.WithImageConfig(image),
+                oci.WithHostNamespace(specs.NetworkNamespace),
+                oci.WithHostResolvconf,
+        }
+        specOpts = append(specOpts, extraOpts...)
+
         return c.client.NewContainer(ctx, c.id,
                 containerd.WithImage(image),
                 containerd.WithSnapshotter(snapshotter),
                 containerd.WithNewSnapshot(c.id, image),
                 containerd.WithRuntime(ociRuntime, nil),
-                containerd.WithNewSpec(
-                        oci.WithDefaultSpecForPlatform(c.platform),
-                        oci.WithImageConfig(image),
-                        oci.WithHostNamespace(specs.NetworkNamespace),
-                        oci.WithHostResolvconf,
-                        oci.WithProcessArgs("sleep", "infinity"),
-                ),
+                containerd.WithNewSpec(specOpts...),
         )
 }</span>
 
@@ -1873,9 +1899,11 @@ import (
         "github.com/containerd/containerd/v2/core/transfer/archive"
         timage "github.com/containerd/containerd/v2/core/transfer/image"
         tregistry "github.com/containerd/containerd/v2/core/transfer/registry"
+        "github.com/containerd/containerd/v2/pkg/oci"
         "github.com/containerd/errdefs"
         "github.com/containerd/platforms"
         "github.com/cruciblehq/crex"
+        "github.com/cruciblehq/spec/protocol"
         dref "github.com/distribution/reference"
 )
 
@@ -1943,7 +1971,7 @@ func (rt *Runtime) StartContainer(ctx context.Context, path string, id string, p
                 return nil, crex.Wrap(ErrRuntime, err)
         }</span>
 
-        <span class="cov0" title="0">ctr, err := c.create(ctx, image)
+        <span class="cov0" title="0">ctr, err := c.create(ctx, image, oci.WithProcessArgs("sleep", "infinity"))
         if err != nil </span><span class="cov0" title="0">{
                 return nil, crex.Wrap(ErrRuntime, err)
         }</span>
@@ -1978,7 +2006,7 @@ func (rt *Runtime) StartContainerFromOCI(ctx context.Context, ref string, id str
 
         c.remove(ctx)
 
-        ctr, err := c.create(ctx, image)
+        ctr, err := c.create(ctx, image, oci.WithProcessArgs("sleep", "infinity"))
         if err != nil </span><span class="cov0" title="0">{
                 return nil, crex.Wrap(ErrRuntime, err)
         }</span>
@@ -2121,8 +2149,10 @@ func (rt *Runtime) ImportImage(ctx context.Context, path, tag string) error <spa
 
 // Starts a container from a previously imported image tag.
 //
-// Any stale container with the same ID is cleaned up first. The container
-// runs detached with a long-running task.
+// The operation is idempotent: if the container is already running it is
+// left untouched; if the container exists but has no active task a new
+// task is started on the existing snapshot; otherwise a new container is
+// created from the image.
 func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container, error) <span class="cov0" title="0">{
         platform := defaultPlatform()
 
@@ -2132,24 +2162,39 @@ func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container
                 platform: platform,
         }
 
-        c.remove(ctx)
-
-        image, err := rt.resolveImage(ctx, tag, platform)
+        status, err := c.Status(ctx)
         if err != nil </span><span class="cov0" title="0">{
                 return nil, crex.Wrap(ErrRuntime, err)
         }</span>
 
-        <span class="cov0" title="0">ctr, err := c.create(ctx, image)
-        if err != nil </span><span class="cov0" title="0">{
-                return nil, crex.Wrap(ErrRuntime, err)
-        }</span>
+        <span class="cov0" title="0">switch status </span>{
+        case protocol.ContainerRunning:<span class="cov0" title="0">
+                return c, nil</span>
 
-        <span class="cov0" title="0">if err := c.startTask(ctx, ctr); err != nil </span><span class="cov0" title="0">{
-                ctr.Delete(ctx, containerd.WithSnapshotCleanup)
-                return nil, crex.Wrap(ErrRuntime, err)
-        }</span>
+        case protocol.ContainerStopped:<span class="cov0" title="0">
+                if err := c.Start(ctx); err != nil </span><span class="cov0" title="0">{
+                        return nil, crex.Wrap(ErrRuntime, err)
+                }</span>
+                <span class="cov0" title="0">return c, nil</span>
 
-        <span class="cov0" title="0">return c, nil</span>
+        default:<span class="cov0" title="0">
+                image, err := rt.resolveImage(ctx, tag, platform)
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, crex.Wrap(ErrRuntime, err)
+                }</span>
+
+                <span class="cov0" title="0">ctr, err := c.create(ctx, image)
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, crex.Wrap(ErrRuntime, err)
+                }</span>
+
+                <span class="cov0" title="0">if err := c.startTask(ctx, ctr); err != nil </span><span class="cov0" title="0">{
+                        ctr.Delete(ctx, containerd.WithSnapshotCleanup)
+                        return nil, crex.Wrap(ErrRuntime, err)
+                }</span>
+
+                <span class="cov0" title="0">return c, nil</span>
+        }
 }
 
 // Removes an image and all containers created from it.
@@ -2333,7 +2378,7 @@ func (s *Server) handleContainerStop(ctx context.Context, conn net.Conn, payload
                 return
         }</span>
 
-        <span class="cov0" title="0">ctr := s.runtime.Container(req.ID)
+        <span class="cov0" title="0">ctr := s.runtime.Container(protocol.ContainerID(req.ID))
         if err := ctr.Stop(ctx); err != nil </span><span class="cov0" title="0">{
                 s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
                 return
@@ -2350,7 +2395,7 @@ func (s *Server) handleContainerDestroy(ctx context.Context, conn net.Conn, payl
                 return
         }</span>
 
-        <span class="cov0" title="0">ctr := s.runtime.Container(req.ID)
+        <span class="cov0" title="0">ctr := s.runtime.Container(protocol.ContainerID(req.ID))
         ctr.Destroy(ctx)
 
         s.respond(conn, protocol.CmdOK, nil)</span>
@@ -2364,7 +2409,7 @@ func (s *Server) handleContainerStatus(ctx context.Context, conn net.Conn, paylo
                 return
         }</span>
 
-        <span class="cov0" title="0">ctr := s.runtime.Container(req.ID)
+        <span class="cov0" title="0">ctr := s.runtime.Container(protocol.ContainerID(req.ID))
         status, err := ctr.Status(ctx)
         if err != nil </span><span class="cov0" title="0">{
                 s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
@@ -2382,7 +2427,7 @@ func (s *Server) handleContainerExec(ctx context.Context, conn net.Conn, payload
                 return
         }</span>
 
-        <span class="cov0" title="0">ctr := s.runtime.Container(req.ID)
+        <span class="cov0" title="0">ctr := s.runtime.Container(protocol.ContainerID(req.ID))
         result, err := ctr.ExecArgs(ctx, req.Command)
         if err != nil </span><span class="cov0" title="0">{
                 s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})
@@ -2405,7 +2450,7 @@ func (s *Server) handleContainerUpdate(ctx context.Context, conn net.Conn, paylo
         }</span>
 
         <span class="cov0" title="0">tag := protocol.ImageTag(req.Ref, req.Version)
-        ctr := s.runtime.Container(req.ID)
+        ctr := s.runtime.Container(protocol.ContainerID(req.ID))
 
         if err := ctr.Stop(ctx); err != nil </span><span class="cov0" title="0">{
                 s.respond(conn, protocol.CmdError, &amp;protocol.ErrorResult{Message: err.Error()})

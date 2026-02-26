@@ -856,13 +856,14 @@ if err := ctr.Export(ctx, "output", []string{"/entrypoint"}); err != nil {
   - [func \(c \*Container\) ExecArgs\(ctx context.Context, args \[\]string\) \(\*ExecResult, error\)](<#Container.ExecArgs>)
   - [func \(c \*Container\) Export\(ctx context.Context, output string, entrypoint \[\]string\) error](<#Container.Export>)
   - [func \(c \*Container\) MkdirAll\(ctx context.Context, path string\) error](<#Container.MkdirAll>)
+  - [func \(c \*Container\) Start\(ctx context.Context\) error](<#Container.Start>)
   - [func \(c \*Container\) Status\(ctx context.Context\) \(protocol.ContainerState, error\)](<#Container.Status>)
   - [func \(c \*Container\) Stop\(ctx context.Context\) error](<#Container.Stop>)
   - [func \(c \*Container\) buildExportTarget\(ctx context.Context, imageName string, mutate func\(\*ocispec.Manifest, \*ocispec.Image\)\) \(ocispec.Descriptor, error\)](<#Container.buildExportTarget>)
   - [func \(c \*Container\) buildImageTarget\(ctx context.Context, root ocispec.Descriptor, index \*ocispec.Index, manifestIdx int, newManifest ocispec.Descriptor, imageName string\) \(ocispec.Descriptor, error\)](<#Container.buildImageTarget>)
   - [func \(c \*Container\) buildProcessSpec\(ctx context.Context, env \[\]string, workdir string, args ...string\) \(\*specs.Process, error\)](<#Container.buildProcessSpec>)
   - [func \(c \*Container\) configPlatform\(ctx context.Context, desc ocispec.Descriptor\) \(ocispec.Platform, bool\)](<#Container.configPlatform>)
-  - [func \(c \*Container\) create\(ctx context.Context, image containerd.Image\) \(containerd.Container, error\)](<#Container.create>)
+  - [func \(c \*Container\) create\(ctx context.Context, image containerd.Image, extraOpts ...oci.SpecOpts\) \(containerd.Container, error\)](<#Container.create>)
   - [func \(c \*Container\) execCommand\(ctx context.Context, stdin io.Reader, stdout io.Writer, env \[\]string, workdir string, args ...string\) \(int, string, error\)](<#Container.execCommand>)
   - [func \(c \*Container\) execProcess\(ctx context.Context, pspec \*specs.Process, stdin io.Reader, stdout, stderr io.Writer\) \(int, error\)](<#Container.execProcess>)
   - [func \(c \*Container\) exportImage\(ctx context.Context, target ocispec.Descriptor, imageName, path string\) error](<#Container.exportImage>)
@@ -1092,6 +1093,17 @@ func (c *Container) MkdirAll(ctx context.Context, path string) error
 
 Creates a directory inside the container, including parents.
 
+<a name="Container.Start"></a>
+### func \(\*Container\) Start
+
+```go
+func (c *Container) Start(ctx context.Context) error
+```
+
+Starts a new task on an existing container.
+
+Any leftover task from a previous run is cleaned up first. The container must already exist; use \[Container.create\] for initial creation.
+
 <a name="Container.Status"></a>
 ### func \(\*Container\) Status
 
@@ -1162,10 +1174,12 @@ Returns false when the config cannot be read.
 ### func \(\*Container\) create
 
 ```go
-func (c *Container) create(ctx context.Context, image containerd.Image) (containerd.Container, error)
+func (c *Container) create(ctx context.Context, image containerd.Image, extraOpts ...oci.SpecOpts) (containerd.Container, error)
 ```
 
-Creates the containerd container with the standard build configuration.
+Creates the containerd container with the standard configuration.
+
+Spec options are applied sequentially. Each one mutates the OCI spec in place, so extraOpts appended after the base options can override values set by WithImageConfig \(last writer wins\). Build containers use this to replace the image entrypoint with "sleep infinity".
 
 <a name="Container.execCommand"></a>
 ### func \(\*Container\) execCommand
@@ -1424,7 +1438,7 @@ func (rt *Runtime) StartFromTag(ctx context.Context, tag, id string) (*Container
 
 Starts a container from a previously imported image tag.
 
-Any stale container with the same ID is cleaned up first. The container runs detached with a long\-running task.
+The operation is idempotent: if the container is already running it is left untouched; if the container exists but has no active task a new task is started on the existing snapshot; otherwise a new container is created from the image.
 
 <a name="Runtime.pullImage"></a>
 ### func \(\*Runtime\) pullImage
