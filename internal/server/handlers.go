@@ -138,7 +138,7 @@ func (s *Server) handleContainerStop(ctx context.Context, conn net.Conn, payload
 		return
 	}
 
-	ctr := s.runtime.Container(req.ID)
+	ctr := s.runtime.Container(protocol.ContainerID(req.ID))
 	if err := ctr.Stop(ctx); err != nil {
 		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{Message: err.Error()})
 		return
@@ -155,7 +155,7 @@ func (s *Server) handleContainerDestroy(ctx context.Context, conn net.Conn, payl
 		return
 	}
 
-	ctr := s.runtime.Container(req.ID)
+	ctr := s.runtime.Container(protocol.ContainerID(req.ID))
 	ctr.Destroy(ctx)
 
 	s.respond(conn, protocol.CmdOK, nil)
@@ -169,7 +169,7 @@ func (s *Server) handleContainerStatus(ctx context.Context, conn net.Conn, paylo
 		return
 	}
 
-	ctr := s.runtime.Container(req.ID)
+	ctr := s.runtime.Container(protocol.ContainerID(req.ID))
 	status, err := ctr.Status(ctx)
 	if err != nil {
 		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{Message: err.Error()})
@@ -187,7 +187,7 @@ func (s *Server) handleContainerExec(ctx context.Context, conn net.Conn, payload
 		return
 	}
 
-	ctr := s.runtime.Container(req.ID)
+	ctr := s.runtime.Container(protocol.ContainerID(req.ID))
 	result, err := ctr.ExecArgs(ctx, req.Command)
 	if err != nil {
 		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{Message: err.Error()})
@@ -210,7 +210,7 @@ func (s *Server) handleContainerUpdate(ctx context.Context, conn net.Conn, paylo
 	}
 
 	tag := protocol.ImageTag(req.Ref, req.Version)
-	ctr := s.runtime.Container(req.ID)
+	ctr := s.runtime.Container(protocol.ContainerID(req.ID))
 
 	if err := ctr.Stop(ctx); err != nil {
 		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{Message: err.Error()})
