@@ -86,6 +86,11 @@ func (c *Container) snapshotDiff(ctx context.Context, info containers.Container)
 }
 
 // Writes the named image to an OCI tar archive at the given path.
+//
+// When the image root is a multi-platform index, only the manifest matching
+// the container's platform is exported. This avoids reading blobs for other
+// platforms that may not be present in the content store (the pull only
+// fetches layers for the target platform).
 func (c *Container) exportImage(ctx context.Context, imageName, path string) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -93,7 +98,15 @@ func (c *Container) exportImage(ctx context.Context, imageName, path string) err
 	}
 	defer f.Close()
 
-	return c.client.Export(ctx, f, archive.WithImage(c.client.ImageService(), imageName))
+	p, err := platforms.Parse(c.platform)
+	if err != nil {
+		return err
+	}
+
+	return c.client.Export(ctx, f,
+		archive.WithImage(c.client.ImageService(), imageName),
+		archive.WithPlatform(platforms.Only(p)),
+	)
 }
 
 // Loads the image's manifest and config, applies the mutation, and writes
@@ -134,8 +147,13 @@ func (c *Container) updateImage(ctx context.Context, imageName string, mutate fu
 //
 // If the root is an OCI Image Index, the index is read and walked to find
 // the manifest matching the container's platform. Returns the manifest
-// descriptor, the index (nil when the root is already a manifest), and the
+// descriptor, the index (nil when the root is al+,,ready a manifest), and the
 // position of the manifest within the index.
+//
+// Some registries (notably Docker Hub) serve index entries without explicit
+// platform metadata. When a descriptor lacks a platform field, the manifest
+// and its config are read to extract the platform from the image config, the
+// same fallback that containerd's images.Manifest uses internally.
 func (c *Container) resolveManifestDescriptor(ctx context.Context, root ocispec.Descriptor, imageName string) (ocispec.Descriptor, *ocispec.Index, int, error) {
 	if !images.IsIndexType(root.MediaType) {
 		return root, nil, 0, nil
@@ -150,19 +168,59 @@ func (c *Container) resolveManifestDescriptor(ctx context.Context, root ocispec.
 	if err != nil {
 		return ocispec.Descriptor{}, nil, 0, err
 	}
-	matcher := platforms.OnlyStrict(p)
 
-	for i, m := range idx.Manifests {
-		if m.Platform != nil && matcher.Match(*m.Platform) {
-			return m, &idx, i, nil
-		}
+	i, ok := c.matchManifest(ctx, idx, platforms.OnlyStrict(p))
+	if ok {
+		return idx.Manifests[i], &idx, i, nil
 	}
 
-	// Fall back to the first manifest in the index.
 	if len(idx.Manifests) == 0 {
 		return ocispec.Descriptor{}, nil, 0, crex.Wrapf(ErrEmptyIndex, "%s", imageName)
 	}
 	return idx.Manifests[0], &idx, 0, nil
+}
+
+// Searches the index for a manifest matching the given platform.
+//
+// Descriptors with an explicit platform field are checked first. If none
+// match, descriptors without a platform field are probed by reading the
+// image config to discover the platform (the "ConfigPlatform" fallback).
+// Returns the index position and true when a match is found.
+func (c *Container) matchManifest(ctx context.Context, idx ocispec.Index, matcher platforms.MatchComparer) (int, bool) {
+	for i, m := range idx.Manifests {
+		if m.Platform != nil && matcher.Match(*m.Platform) {
+			return i, true
+		}
+	}
+	for i, m := range idx.Manifests {
+		if m.Platform != nil || !images.IsManifestType(m.MediaType) {
+			continue
+		}
+		if p, ok := c.configPlatform(ctx, m); ok && matcher.Match(p) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// Reads the image config referenced by a manifest descriptor and returns the
+// platform declared in the config.
+//
+// Returns false when the config cannot be read.
+func (c *Container) configPlatform(ctx context.Context, desc ocispec.Descriptor) (ocispec.Platform, bool) {
+	manifest, err := c.readManifest(ctx, desc)
+	if err != nil {
+		return ocispec.Platform{}, false
+	}
+	config, err := c.readConfig(ctx, manifest.Config)
+	if err != nil {
+		return ocispec.Platform{}, false
+	}
+	return ocispec.Platform{
+		OS:           config.OS,
+		Architecture: config.Architecture,
+		Variant:      config.Variant,
+	}, true
 }
 
 // Reads the manifest and config, applies the mutation, and writes the
@@ -191,15 +249,16 @@ func (c *Container) mutateManifest(ctx context.Context, target ocispec.Descripto
 
 // Produces the final image target descriptor after a manifest update.
 //
-// When the image was resolved through an index, the index entry is replaced
-// with the new manifest descriptor and the index is written back. Otherwise
-// the new manifest descriptor is returned directly.
+// When the image was resolved through an index, a new single-entry index is
+// written containing only the updated manifest. Entries for other platforms
+// are dropped because their layer blobs are typically not present in the
+// content store (only the target platform's layers are fetched).
 func (c *Container) buildImageTarget(ctx context.Context, root ocispec.Descriptor, index *ocispec.Index, manifestIdx int, newManifest ocispec.Descriptor, imageName string) (ocispec.Descriptor, error) {
 	if index == nil {
 		return newManifest, nil
 	}
 
-	index.Manifests[manifestIdx] = newManifest
+	index.Manifests = []ocispec.Descriptor{newManifest}
 	return c.writeBlob(ctx, root.MediaType, index, imageName+"-index", content.WithLabels(indexGCLabels(*index)))
 }
 
