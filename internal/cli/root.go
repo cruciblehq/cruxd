@@ -18,6 +18,7 @@ var RootCmd struct {
 	Verbose bool       `short:"v" help:"Enable verbose output."`
 	Debug   bool       `short:"d" help:"Enable debug output."`
 	Socket  string     `short:"s" help:"Override the default Unix socket path." placeholder:"PATH"`
+	PIDFile string     `help:"Override the default PID file path." placeholder:"PATH"`
 	Start   StartCmd   `cmd:"" help:"Start the daemon."`
 	Version VersionCmd `cmd:"" help:"Show version information."`
 }

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net"
 	"os"
 	"time"
@@ -58,16 +57,6 @@ func (s *Server) handleStatus(_ context.Context, conn net.Conn) {
 		Uptime:  uptime.String(),
 		Builds:  builds,
 	})
-}
-
-// Handles a shutdown command.
-func (s *Server) handleShutdown(_ context.Context, conn net.Conn) {
-	s.respond(conn, protocol.CmdOK, nil)
-	slog.Info("shutdown requested")
-
-	go func() {
-		s.Stop()
-	}()
 }
 
 // Handles an image-import command.

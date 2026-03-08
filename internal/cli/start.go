@@ -16,7 +16,8 @@ type StartCmd struct{}
 // is cancelled (e.g. via SIGINT or SIGTERM).
 func (c *StartCmd) Run(ctx context.Context) error {
 	srv, err := server.New(server.Config{
-		SocketPath: RootCmd.Socket,
+		SocketPath:  RootCmd.Socket,
+		PIDFilePath: RootCmd.PIDFile,
 	})
 	if err != nil {
 		return err
