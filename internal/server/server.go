@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -40,19 +41,21 @@ const (
 // Holds server configuration.
 type Config struct {
 	SocketPath          string // Override for the Unix socket path. Empty uses the default.
+	PIDFilePath         string // Override for the PID file path. Empty uses the default.
 	ContainerdAddress   string // Containerd socket address. Empty uses [DefaultContainerdAddress].
 	ContainerdNamespace string // Containerd namespace for images and containers. Empty uses [DefaultContainerdNamespace].
 }
 
 // Listens on a Unix domain socket and dispatches commands.
 type Server struct {
-	socketPath string           // Path to the Unix socket file.
-	runtime    *runtime.Runtime // Containerd-backed container runtime.
-	listener   net.Listener     // Listener for incoming connections.
-	startedAt  time.Time        // Timestamp when the server started.
-	builds     int              // Total number of build commands processed.
-	done       chan struct{}    // Channel to signal server shutdown.
-	mu         sync.Mutex       // Mutex to protect shared state.
+	socketPath  string           // Path to the Unix socket file.
+	pidFilePath string           // Path to the PID file.
+	runtime     *runtime.Runtime // Containerd-backed container runtime.
+	listener    net.Listener     // Listener for incoming connections.
+	startedAt   time.Time        // Timestamp when the server started.
+	builds      int              // Total number of build commands processed.
+	done        chan struct{}    // Channel to signal server shutdown.
+	mu          sync.Mutex       // Mutex to protect shared state.
 }
 
 // Creates a new server instance.
@@ -61,7 +64,12 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	socketPath := cfg.SocketPath
 	if socketPath == "" {
-		socketPath = paths.Socket()
+		socketPath = paths.Socket("default")
+	}
+
+	pidFilePath := cfg.PIDFilePath
+	if pidFilePath == "" {
+		pidFilePath = paths.PIDFile("default")
 	}
 
 	containerdAddress := cfg.ContainerdAddress
@@ -80,9 +88,10 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	return &Server{
-		socketPath: socketPath,
-		runtime:    rt,
-		done:       make(chan struct{}),
+		socketPath:  socketPath,
+		pidFilePath: pidFilePath,
+		runtime:     rt,
+		done:        make(chan struct{}),
 	}, nil
 }
 
@@ -96,7 +105,7 @@ func (s *Server) Start() error {
 	s.listener = listener
 	s.startedAt = time.Now()
 
-	if err := writePID(); err != nil {
+	if err := writePID(s.pidFilePath); err != nil {
 		slog.Warn("failed to write PID file", "error", err)
 	}
 
@@ -109,7 +118,8 @@ func (s *Server) Start() error {
 // Creates the Unix socket listener, removes any stale socket from a previous
 // run, and applies permissions.
 func listen(socketPath string) (net.Listener, error) {
-	if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil {
+	dir := filepath.Dir(socketPath)
+	if err := os.MkdirAll(dir, paths.DefaultDirMode); err != nil {
 		return nil, crex.Wrap(ErrServer, err)
 	}
 
@@ -161,7 +171,7 @@ func (s *Server) Stop() error {
 	}
 
 	os.Remove(s.socketPath)
-	os.Remove(paths.PIDFile())
+	os.Remove(s.pidFilePath)
 
 	return nil
 }
@@ -241,8 +251,6 @@ func (s *Server) dispatch(ctx context.Context, conn net.Conn, cmd protocol.Comma
 		s.handleContainerUpdate(ctx, conn, payload)
 	case protocol.CmdStatus:
 		s.handleStatus(ctx, conn)
-	case protocol.CmdShutdown:
-		s.handleShutdown(ctx, conn)
 	default:
 		s.respond(conn, protocol.CmdError, &protocol.ErrorResult{
 			Message: fmt.Sprintf("unknown command: %s", cmd),
@@ -263,11 +271,12 @@ func (s *Server) respond(conn net.Conn, cmd protocol.Command, payload any) {
 
 // Writes the daemon PID to the PID file so the CLI can detect whether the
 // daemon is already running and send it signals.
-func writePID() error {
-	if err := os.MkdirAll(paths.Runtime(), paths.DefaultDirMode); err != nil {
+func writePID(pidFilePath string) error {
+	dir := filepath.Dir(pidFilePath)
+	if err := os.MkdirAll(dir, paths.DefaultDirMode); err != nil {
 		return err
 	}
-	return os.WriteFile(paths.PIDFile(), []byte(fmt.Sprintf("%d", os.Getpid())), paths.DefaultFileMode)
+	return os.WriteFile(pidFilePath, []byte(fmt.Sprintf("%d", os.Getpid())), paths.DefaultFileMode)
 }
 
 // Returns a derived context that is cancelled when the remote end of the
