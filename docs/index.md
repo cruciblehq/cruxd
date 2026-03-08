@@ -730,6 +730,7 @@ var RootCmd struct {
     Verbose bool       `short:"v" help:"Enable verbose output."`
     Debug   bool       `short:"d" help:"Enable debug output."`
     Socket  string     `short:"s" help:"Override the default Unix socket path." placeholder:"PATH"`
+    PIDFile string     `help:"Override the default PID file path." placeholder:"PATH"`
     Start   StartCmd   `cmd:"" help:"Start the daemon."`
     Version VersionCmd `cmd:"" help:"Show version information."`
 }
@@ -1550,7 +1551,7 @@ srv.Wait()
 - [func contextWithDisconnect\(parent context.Context, r io.Reader\) \(context.Context, context.CancelFunc\)](<#contextWithDisconnect>)
 - [func listen\(socketPath string\) \(net.Listener, error\)](<#listen>)
 - [func setSocketPermissions\(socketPath string\) error](<#setSocketPermissions>)
-- [func writePID\(\) error](<#writePID>)
+- [func writePID\(pidFilePath string\) error](<#writePID>)
 - [type Config](<#Config>)
 - [type Server](<#Server>)
   - [func New\(cfg Config\) \(\*Server, error\)](<#New>)
@@ -1569,7 +1570,6 @@ srv.Wait()
   - [func \(s \*Server\) handleImageDestroy\(ctx context.Context, conn net.Conn, payload json.RawMessage\)](<#Server.handleImageDestroy>)
   - [func \(s \*Server\) handleImageImport\(ctx context.Context, conn net.Conn, payload json.RawMessage\)](<#Server.handleImageImport>)
   - [func \(s \*Server\) handleImageStart\(ctx context.Context, conn net.Conn, payload json.RawMessage\)](<#Server.handleImageStart>)
-  - [func \(s \*Server\) handleShutdown\(\_ context.Context, conn net.Conn\)](<#Server.handleShutdown>)
   - [func \(s \*Server\) handleStatus\(\_ context.Context, conn net.Conn\)](<#Server.handleStatus>)
   - [func \(s \*Server\) respond\(conn net.Conn, cmd protocol.Command, payload any\)](<#Server.respond>)
 
@@ -1640,7 +1640,7 @@ Restricts socket access to owner and group. The daemon does not run as root; any
 ## func writePID
 
 ```go
-func writePID() error
+func writePID(pidFilePath string) error
 ```
 
 Writes the daemon PID to the PID file so the CLI can detect whether the daemon is already running and send it signals.
@@ -1653,6 +1653,7 @@ Holds server configuration.
 ```go
 type Config struct {
     SocketPath          string // Override for the Unix socket path. Empty uses the default.
+    PIDFilePath         string // Override for the PID file path. Empty uses the default.
     ContainerdAddress   string // Containerd socket address. Empty uses [DefaultContainerdAddress].
     ContainerdNamespace string // Containerd namespace for images and containers. Empty uses [DefaultContainerdNamespace].
 }
@@ -1665,13 +1666,14 @@ Listens on a Unix domain socket and dispatches commands.
 
 ```go
 type Server struct {
-    socketPath string           // Path to the Unix socket file.
-    runtime    *runtime.Runtime // Containerd-backed container runtime.
-    listener   net.Listener     // Listener for incoming connections.
-    startedAt  time.Time        // Timestamp when the server started.
-    builds     int              // Total number of build commands processed.
-    done       chan struct{}    // Channel to signal server shutdown.
-    mu         sync.Mutex       // Mutex to protect shared state.
+    socketPath  string           // Path to the Unix socket file.
+    pidFilePath string           // Path to the PID file.
+    runtime     *runtime.Runtime // Containerd-backed container runtime.
+    listener    net.Listener     // Listener for incoming connections.
+    startedAt   time.Time        // Timestamp when the server started.
+    builds      int              // Total number of build commands processed.
+    done        chan struct{}    // Channel to signal server shutdown.
+    mu          sync.Mutex       // Mutex to protect shared state.
 }
 ```
 
@@ -1824,15 +1826,6 @@ func (s *Server) handleImageStart(ctx context.Context, conn net.Conn, payload js
 ```
 
 Handles an image\-start command.
-
-<a name="Server.handleShutdown"></a>
-### func \(\*Server\) handleShutdown
-
-```go
-func (s *Server) handleShutdown(_ context.Context, conn net.Conn)
-```
-
-Handles a shutdown command.
 
 <a name="Server.handleStatus"></a>
 ### func \(\*Server\) handleStatus
