@@ -109,7 +109,7 @@ func (s *Server) Start() error {
 	s.startedAt = time.Now()
 
 	if err := writePID(s.pidFilePath); err != nil {
-		slog.Warn("failed to write PID file", "error", err)
+		slog.Error("failed to write PID file", "error", err)
 	}
 
 	slog.Info("server listening on socket", "path", s.socketPath)
@@ -139,17 +139,17 @@ func (s *Server) signalReady() {
 	}
 	f := os.NewFile(uintptr(s.readyFD), "ready-fd")
 	if f == nil {
-		slog.Warn("invalid file descriptor", "fd", s.readyFD)
+		slog.Error("invalid file descriptor", "fd", s.readyFD)
 		return
 	}
 	data, err := protocol.Encode(protocol.CmdOK, nil)
 	if err != nil {
-		slog.Warn("failed to encode ready message", "fd", s.readyFD, "error", err)
+		slog.Error("failed to encode ready message", "fd", s.readyFD, "error", err)
 		return
 	}
 	data = append(data, '\n')
 	if _, err := f.Write(data); err != nil {
-		slog.Warn("failed to signal readiness", "fd", s.readyFD, "error", err)
+		slog.Error("failed to signal readiness", "fd", s.readyFD, "error", err)
 	}
 	if s.readyFD > 2 {
 		f.Close()
@@ -171,19 +171,20 @@ func listen(socketPath string) (net.Listener, error) {
 		return nil, crex.Wrapf(ErrServer, "failed to listen on %s", socketPath)
 	}
 
-	if err := setSocketPermissions(socketPath); err != nil {
-		listener.Close()
-		return nil, err
-	}
+	setSocketPermissions(socketPath)
 
 	return listener, nil
 }
 
-// Restricts socket access to owner and group. The daemon does not run as
-// root; any user in the cruxd group can also connect.
-func setSocketPermissions(socketPath string) error {
+// Restricts socket access to owner and group where supported.
+//
+// On virtiofs mounts (used by Lima on Darwin), permission changes may fail
+// because the host filesystem controls access. This is non-fatal since the
+// socket is already usable by the creating process.
+func setSocketPermissions(socketPath string) {
 	if err := os.Chmod(socketPath, socketMode); err != nil {
-		return crex.Wrapf(ErrServer, "failed to chmod socket %s", socketPath)
+		slog.Debug("failed to chmod socket, filesystem may not support it", "path", socketPath, "error", err)
+		return
 	}
 
 	if g, err := user.LookupGroup(socketGroup); err == nil {
@@ -195,8 +196,6 @@ func setSocketPermissions(socketPath string) error {
 	} else {
 		slog.Warn("socket group not found, socket accessible to owner only", "group", socketGroup)
 	}
-
-	return nil
 }
 
 // Shuts down the server and cleans up resources.
