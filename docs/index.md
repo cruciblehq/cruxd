@@ -1551,7 +1551,7 @@ srv.Wait()
 - [Variables](<#variables>)
 - [func contextWithDisconnect\(parent context.Context, r io.Reader\) \(context.Context, context.CancelFunc\)](<#contextWithDisconnect>)
 - [func listen\(socketPath string\) \(net.Listener, error\)](<#listen>)
-- [func setSocketPermissions\(socketPath string\) error](<#setSocketPermissions>)
+- [func setSocketPermissions\(socketPath string\)](<#setSocketPermissions>)
 - [func writePID\(pidFilePath string\) error](<#writePID>)
 - [type Config](<#Config>)
 - [type Server](<#Server>)
@@ -1633,10 +1633,12 @@ Creates the Unix socket listener, removes any stale socket from a previous run, 
 ## func setSocketPermissions
 
 ```go
-func setSocketPermissions(socketPath string) error
+func setSocketPermissions(socketPath string)
 ```
 
-Restricts socket access to owner and group. The daemon does not run as root; any user in the cruxd group can also connect.
+Restricts socket access to owner and group where supported.
+
+On virtiofs mounts \(used by Lima on Darwin\), permission changes may fail because the host filesystem controls access. This is non\-fatal since the socket is already usable by the creating process.
 
 <a name="writePID"></a>
 ## func writePID

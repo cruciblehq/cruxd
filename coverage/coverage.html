@@ -1116,7 +1116,7 @@ func (c *Container) Destroy(ctx context.Context) <span class="cov0" title="0">{
         ctr, err := c.client.LoadContainer(ctx, c.id)
         if err != nil </span><span class="cov0" title="0">{
                 if !errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
-                        slog.Warn("failed to load container for destruction", "id", c.id, "error", err)
+                        slog.Error("failed to load container for destruction", "id", c.id, "error", err)
                 }</span>
                 <span class="cov0" title="0">return</span>
         }
@@ -1127,7 +1127,7 @@ func (c *Container) Destroy(ctx context.Context) <span class="cov0" title="0">{
         }</span>
 
         <span class="cov0" title="0">if err := ctr.Delete(ctx, containerd.WithSnapshotCleanup); err != nil &amp;&amp; !errdefs.IsNotFound(err) </span><span class="cov0" title="0">{
-                slog.Warn("failed to delete container during destruction", "id", c.id, "error", err)
+                slog.Error("failed to delete container during destruction", "id", c.id, "error", err)
         }</span>
 }
 
@@ -2575,7 +2575,7 @@ func (s *Server) Start() error <span class="cov0" title="0">{
         s.startedAt = time.Now()
 
         if err := writePID(s.pidFilePath); err != nil </span><span class="cov0" title="0">{
-                slog.Warn("failed to write PID file", "error", err)
+                slog.Error("failed to write PID file", "error", err)
         }</span>
 
         <span class="cov0" title="0">slog.Info("server listening on socket", "path", s.socketPath)
@@ -2605,17 +2605,17 @@ func (s *Server) signalReady() <span class="cov0" title="0">{
         }</span>
         <span class="cov0" title="0">f := os.NewFile(uintptr(s.readyFD), "ready-fd")
         if f == nil </span><span class="cov0" title="0">{
-                slog.Warn("invalid file descriptor", "fd", s.readyFD)
+                slog.Error("invalid file descriptor", "fd", s.readyFD)
                 return
         }</span>
         <span class="cov0" title="0">data, err := protocol.Encode(protocol.CmdOK, nil)
         if err != nil </span><span class="cov0" title="0">{
-                slog.Warn("failed to encode ready message", "fd", s.readyFD, "error", err)
+                slog.Error("failed to encode ready message", "fd", s.readyFD, "error", err)
                 return
         }</span>
         <span class="cov0" title="0">data = append(data, '\n')
         if _, err := f.Write(data); err != nil </span><span class="cov0" title="0">{
-                slog.Warn("failed to signal readiness", "fd", s.readyFD, "error", err)
+                slog.Error("failed to signal readiness", "fd", s.readyFD, "error", err)
         }</span>
         <span class="cov0" title="0">if s.readyFD &gt; 2 </span><span class="cov0" title="0">{
                 f.Close()
@@ -2637,19 +2637,20 @@ func listen(socketPath string) (net.Listener, error) <span class="cov0" title="0
                 return nil, crex.Wrapf(ErrServer, "failed to listen on %s", socketPath)
         }</span>
 
-        <span class="cov0" title="0">if err := setSocketPermissions(socketPath); err != nil </span><span class="cov0" title="0">{
-                listener.Close()
-                return nil, err
-        }</span>
+        <span class="cov0" title="0">setSocketPermissions(socketPath)
 
-        <span class="cov0" title="0">return listener, nil</span>
+        return listener, nil</span>
 }
 
-// Restricts socket access to owner and group. The daemon does not run as
-// root; any user in the cruxd group can also connect.
-func setSocketPermissions(socketPath string) error <span class="cov0" title="0">{
+// Restricts socket access to owner and group where supported.
+//
+// On virtiofs mounts (used by Lima on Darwin), permission changes may fail
+// because the host filesystem controls access. This is non-fatal since the
+// socket is already usable by the creating process.
+func setSocketPermissions(socketPath string) <span class="cov0" title="0">{
         if err := os.Chmod(socketPath, socketMode); err != nil </span><span class="cov0" title="0">{
-                return crex.Wrapf(ErrServer, "failed to chmod socket %s", socketPath)
+                slog.Debug("failed to chmod socket, filesystem may not support it", "path", socketPath, "error", err)
+                return
         }</span>
 
         <span class="cov0" title="0">if g, err := user.LookupGroup(socketGroup); err == nil </span><span class="cov0" title="0">{
@@ -2661,8 +2662,6 @@ func setSocketPermissions(socketPath string) error <span class="cov0" title="0">
         } else<span class="cov0" title="0"> {
                 slog.Warn("socket group not found, socket accessible to owner only", "group", socketGroup)
         }</span>
-
-        <span class="cov0" title="0">return nil</span>
 }
 
 // Shuts down the server and cleans up resources.
