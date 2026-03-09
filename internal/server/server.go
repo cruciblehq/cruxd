@@ -44,12 +44,14 @@ type Config struct {
 	PIDFilePath         string // Override for the PID file path. Empty uses the default.
 	ContainerdAddress   string // Containerd socket address. Empty uses [DefaultContainerdAddress].
 	ContainerdNamespace string // Containerd namespace for images and containers. Empty uses [DefaultContainerdNamespace].
+	ReadyFD             int    // File descriptor to signal readiness on. Negative means disabled.
 }
 
 // Listens on a Unix domain socket and dispatches commands.
 type Server struct {
 	socketPath  string           // Path to the Unix socket file.
 	pidFilePath string           // Path to the PID file.
+	readyFD     int              // File descriptor for readiness signaling (-1 = disabled).
 	runtime     *runtime.Runtime // Containerd-backed container runtime.
 	listener    net.Listener     // Listener for incoming connections.
 	startedAt   time.Time        // Timestamp when the server started.
@@ -90,6 +92,7 @@ func New(cfg Config) (*Server, error) {
 	return &Server{
 		socketPath:  socketPath,
 		pidFilePath: pidFilePath,
+		readyFD:     cfg.ReadyFD,
 		runtime:     rt,
 		done:        make(chan struct{}),
 	}, nil
@@ -111,8 +114,46 @@ func (s *Server) Start() error {
 
 	slog.Info("server listening on socket", "path", s.socketPath)
 
+	s.signalReady()
+
 	go s.accept()
 	return nil
+}
+
+// Signals readiness to the parent process via the ready-fd.
+//
+// The ready-fd is a bootstrap channel that solves a sequencing problem: crux
+// needs to know when the Unix socket is bound and accepting connections, but
+// it cannot use the socket itself for that signal because the socket does not
+// exist yet when crux needs to start waiting. The ready-fd (a pipe on Linux,
+// stdout on Darwin) bridges the gap between process start and socket readiness.
+//
+// Writes a [protocol.CmdOK] envelope followed by a newline. If the fd is not
+// a standard stream (stdin, stdout, stderr), it is closed after writing so
+// the reader receives EOF. Standard streams are left open because on Darwin
+// the ready-fd is stdout, and closing it would tear down the limactl SSH
+// session that keeps cruxd alive.
+func (s *Server) signalReady() {
+	if s.readyFD < 0 {
+		return
+	}
+	f := os.NewFile(uintptr(s.readyFD), "ready-fd")
+	if f == nil {
+		slog.Warn("invalid file descriptor", "fd", s.readyFD)
+		return
+	}
+	data, err := protocol.Encode(protocol.CmdOK, nil)
+	if err != nil {
+		slog.Warn("failed to encode ready message", "fd", s.readyFD, "error", err)
+		return
+	}
+	data = append(data, '\n')
+	if _, err := f.Write(data); err != nil {
+		slog.Warn("failed to signal readiness", "fd", s.readyFD, "error", err)
+	}
+	if s.readyFD > 2 {
+		f.Close()
+	}
 }
 
 // Creates the Unix socket listener, removes any stale socket from a previous

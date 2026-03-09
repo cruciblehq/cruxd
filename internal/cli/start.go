@@ -18,6 +18,7 @@ func (c *StartCmd) Run(ctx context.Context) error {
 	srv, err := server.New(server.Config{
 		SocketPath:  RootCmd.Socket,
 		PIDFilePath: RootCmd.PIDFile,
+		ReadyFD:     RootCmd.ReadyFD,
 	})
 	if err != nil {
 		return err
