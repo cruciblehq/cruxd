@@ -109,7 +109,7 @@ func (s *Server) Start() error {
 	s.startedAt = time.Now()
 
 	if err := writePID(s.pidFilePath); err != nil {
-		slog.Warn("failed to write PID file", "error", err)
+		slog.Error("failed to write PID file", "error", err)
 	}
 
 	slog.Info("server listening on socket", "path", s.socketPath)
@@ -139,17 +139,17 @@ func (s *Server) signalReady() {
 	}
 	f := os.NewFile(uintptr(s.readyFD), "ready-fd")
 	if f == nil {
-		slog.Warn("invalid file descriptor", "fd", s.readyFD)
+		slog.Error("invalid file descriptor", "fd", s.readyFD)
 		return
 	}
 	data, err := protocol.Encode(protocol.CmdOK, nil)
 	if err != nil {
-		slog.Warn("failed to encode ready message", "fd", s.readyFD, "error", err)
+		slog.Error("failed to encode ready message", "fd", s.readyFD, "error", err)
 		return
 	}
 	data = append(data, '\n')
 	if _, err := f.Write(data); err != nil {
-		slog.Warn("failed to signal readiness", "fd", s.readyFD, "error", err)
+		slog.Error("failed to signal readiness", "fd", s.readyFD, "error", err)
 	}
 	if s.readyFD > 2 {
 		f.Close()

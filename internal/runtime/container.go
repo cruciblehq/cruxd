@@ -93,7 +93,7 @@ func (c *Container) Destroy(ctx context.Context) {
 	ctr, err := c.client.LoadContainer(ctx, c.id)
 	if err != nil {
 		if !errdefs.IsNotFound(err) {
-			slog.Warn("failed to load container for destruction", "id", c.id, "error", err)
+			slog.Error("failed to load container for destruction", "id", c.id, "error", err)
 		}
 		return
 	}
@@ -104,7 +104,7 @@ func (c *Container) Destroy(ctx context.Context) {
 	}
 
 	if err := ctr.Delete(ctx, containerd.WithSnapshotCleanup); err != nil && !errdefs.IsNotFound(err) {
-		slog.Warn("failed to delete container during destruction", "id", c.id, "error", err)
+		slog.Error("failed to delete container during destruction", "id", c.id, "error", err)
 	}
 }
 
