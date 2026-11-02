@@ -1,0 +1,63 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.out
+coverage.txt
+coverage.html
+
+# Build outputs
+/cruxd
+/cruxd.exe
+dist/
+build/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# TLS material (certificates and keys for mTLS)
+*.pem
+*.key
+*.crt
+*.csr
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Temporary files
+*.tmp
+*.temp
+
+# Runtime files
+*.sock
+*.pid
