@@ -59,6 +59,10 @@ func (f *fakeRuntime) Load(context.Context, compute.ImageRef, compute.Options) (
 	}
 	return f.ctr, nil
 }
+func (f *fakeRuntime) Health(context.Context) error {
+	return f.err
+}
+
 func (f *fakeRuntime) Close() error { return nil }
 
 func TestServeHTTPUnknownPath(t *testing.T) {

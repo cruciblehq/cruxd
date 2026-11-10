@@ -41,6 +41,9 @@ const (
 	// Timeout for establishing the initial containerd gRPC connection.
 	connectTimeout = 10 * time.Second
 
+	// Timeout for one containerd health check.
+	healthTimeout = 5 * time.Second
+
 	// Snapshotter used for all container and image operations.
 	overlayfsSnapshotter = "overlayfs"
 
@@ -247,6 +250,24 @@ func (c *Client) Load(ctx context.Context, ref compute.ImageRef, opts compute.Op
 		oci:         opts.OCI,
 	}
 	return ctr, nil
+}
+
+// Checks that containerd is serving requests.
+//
+// Gives up after [healthTimeout], since the containerd client otherwise waits
+// for the connection to recover.
+func (c *Client) Health(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
+	defer cancel()
+
+	serving, err := c.conn.IsServing(ctx)
+	if err != nil {
+		return crex.Wrap(ErrConnect, err)
+	}
+	if !serving {
+		return crex.Newf(ErrConnect, "containerd is not serving")
+	}
+	return nil
 }
 
 // Closes the client and releases the underlying containerd connection.
