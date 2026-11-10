@@ -285,11 +285,13 @@ func writeLayerBlob(ctx context.Context, cs content.Store, r io.Reader) (ocispec
 //
 // Does not create an image or affect the writable snapshot. Typically called
 // after [Container.Inspect] to modify specific fields while preserving the
-// rest. The change takes effect when [Container.Commit] is called.
-func (c *Container) Configure(cfg ocispec.ImageConfig) {
+// rest. The change takes effect when [Container.Commit] is called. Always
+// returns nil, since the configuration is only held in memory.
+func (c *Container) Configure(_ context.Context, cfg ocispec.ImageConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.config = &cfg
+	return nil
 }
 
 // Creates a new image from the container's current state.

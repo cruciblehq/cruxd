@@ -12,7 +12,7 @@ const (
 	DefaultNamespace = "crux"                            // Containerd namespace for all operations.
 )
 
-// Compile-time proof that the direct implementation satisfies the spec contract.
+// Make sure the direct implementation satisfies the spec.
 var (
 	_ compute.Container = (*Container)(nil)
 	_ compute.Runtime   = runtimeAdapter{}

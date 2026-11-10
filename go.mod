@@ -5,7 +5,7 @@ go 1.25.1
 require (
 	github.com/containerd/containerd/v2 v2.0.2
 	github.com/containerd/errdefs v1.0.0
-	github.com/cruciblehq/spec v0.0.0-20261106220922-ad629ce9539b
+	github.com/cruciblehq/spec v0.0.0-20261110150459-f070dc17c32e
 	github.com/cruciblehq/utils-go v0.0.0-20260622164141-8aa115724f02
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1

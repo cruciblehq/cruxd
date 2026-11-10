@@ -92,7 +92,7 @@ func VersionString() string {
 	if s == mainBranch {
 		s = ""
 	} else {
-		s = "+" + s
+		s = fmt.Sprintf("+%s", s)
 	}
 
 	return fmt.Sprintf("%s%s %s [%s]", Version(), s, GitCommit(), Arch())

@@ -138,7 +138,10 @@ func (a *Agent) configure(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	c.Configure(req.Config)
+	if err := c.Configure(r.Context(), req.Config); err != nil {
+		_ = a.failErr(w, err)
+		return
+	}
 	_ = a.ok(w)
 }
 

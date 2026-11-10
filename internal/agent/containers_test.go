@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -49,7 +48,8 @@ func (f *fakeContainer) Copy(context.Context, io.Reader) error {
 	return f.err
 }
 
-func (f *fakeContainer) Configure(compute.ImageConfig) {
+func (f *fakeContainer) Configure(context.Context, compute.ImageConfig) error {
+	return f.err
 }
 
 func (f *fakeContainer) Inspect(context.Context) (compute.ImageConfig, error) {
@@ -112,11 +112,7 @@ func TestExec(t *testing.T) {
 		}
 		switch msg.Type {
 		case compute.ExecOutput:
-			raw, err := base64.StdEncoding.DecodeString(string(msg.Data))
-			if err != nil {
-				t.Fatalf("decode exec data: %v", err)
-			}
-			gotOutput += string(raw)
+			gotOutput += string(msg.Data)
 		case compute.ExecExit:
 			exitSeen = true
 			if msg.Code != 0 {

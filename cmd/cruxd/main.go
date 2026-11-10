@@ -3,16 +3,19 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/cruciblehq/cruxd/cmd/cruxd/internal"
 	"github.com/cruciblehq/cruxd/internal/agent"
 	"github.com/cruciblehq/cruxd/internal/compute"
+	speccompute "github.com/cruciblehq/spec/compute"
 )
 
 // Port allocation.
@@ -21,9 +24,6 @@ import (
 // never reused. Published ports are assigned by cruxd from a range to services
 // to avoid conflicts with the control port and the OS ephemeral port range.
 const (
-
-	// Default control port for the crux-cruxd API.
-	defaultPort = "2789"
 
 	// Environment variable overriding the control port.
 	envPort = "CRUXD_PORT"
@@ -46,12 +46,12 @@ const (
 	shutdownTimeout = 10 * time.Second
 )
 
-// Returns the listen port (configured envPort, or the default).
+// Returns the listen port (configured envPort, or the spec default).
 func port() string {
 	if p := os.Getenv(envPort); p != "" {
 		return p
 	}
-	return defaultPort
+	return strconv.Itoa(speccompute.DefaultPort)
 }
 
 // Starts the agent, connects to containerd, and runs until interrupted.
@@ -88,7 +88,7 @@ func newLogger() *slog.Logger {
 // Builds the HTTP server for handler on the configured control port.
 func newServer(handler http.Handler) *http.Server {
 	return &http.Server{
-		Addr:    ":" + port(),
+		Addr:    fmt.Sprintf(":%s", port()),
 		Handler: handler,
 
 		// Request and response bodies can be large (e.g., image archives) and
