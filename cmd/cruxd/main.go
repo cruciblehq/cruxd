@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,10 +12,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cruciblehq/cruxd/agent"
 	"github.com/cruciblehq/cruxd/cmd/cruxd/internal"
-	"github.com/cruciblehq/cruxd/internal/agent"
-	"github.com/cruciblehq/cruxd/internal/compute"
+	"github.com/cruciblehq/cruxd/compute"
+	"github.com/cruciblehq/cruxd/identity"
 	speccompute "github.com/cruciblehq/spec/compute"
+	"github.com/cruciblehq/spec/trust"
+	"github.com/cruciblehq/utils-go/crex"
+	"github.com/cruciblehq/utils-go/httpx"
 )
 
 // Port allocation.
@@ -27,10 +31,6 @@ const (
 
 	// Environment variable overriding the control port.
 	envPort = "CRUXD_PORT"
-
-	// Inclusive bounds of the range cruxd allocates for published service ports.
-	publishPortMin = 20000
-	publishPortMax = 29999
 )
 
 // Server timeouts.
@@ -54,9 +54,21 @@ func port() string {
 	return strconv.Itoa(speccompute.DefaultPort)
 }
 
+// Directory holding the machine identity once enrolled.
+const stateDir = "/var/lib/cruxd"
+
 // Starts the agent, connects to containerd, and runs until interrupted.
 func main() {
 	logger := newLogger()
+
+	id, err := identity.Load(stateDir, trust.EnrollmentPath)
+	if err != nil {
+		logger.Error("failed to load machine identity", "dir", stateDir, "error", err)
+		os.Exit(1)
+	}
+	if !id.Enrolled() {
+		logger.Info("machine is not enrolled, serving enrollment only")
+	}
 
 	// Connect to containerd
 	runtime, err := compute.New(compute.DefaultSocket, compute.DefaultNamespace)
@@ -67,29 +79,32 @@ func main() {
 	defer runtime.Close()
 
 	build := agent.Build{
-		Version: internal.Version(),
-		Commit:  internal.GitCommit(),
+		Version: internal.Build.Version(),
+		Commit:  internal.Build.Commit(),
 	}
 
-	run(logger, newServer(agent.New(runtime, build)))
+	tlsConfig := trust.ServerConfig(id.Certificate, id.Root(), id.Revocations)
+	run(logger, newServer(agent.New(runtime, id, build), tlsConfig))
 }
 
 // Builds the logger.
 //
-// The logger is configured with log level based on the debug flag.
+// Records are written to stderr as JSON lines with all their attributes. The
+// level is debug for debug builds and info otherwise.
 func newLogger() *slog.Logger {
 	level := slog.LevelInfo
-	if internal.IsDebug() {
+	if internal.Debug {
 		level = slog.LevelDebug
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	return slog.New(crex.NewHandlerWithLevel(level).SetFormatter(&crex.JSONFormatter{Verbose: true}))
 }
 
-// Builds the HTTP server for handler on the configured control port.
-func newServer(handler http.Handler) *http.Server {
+// Builds the HTTPS server for handler on the configured control port.
+func newServer(handler http.Handler, tlsConfig *tls.Config) *http.Server {
 	return &http.Server{
-		Addr:    fmt.Sprintf(":%s", port()),
-		Handler: handler,
+		Addr:      fmt.Sprintf(":%s", port()),
+		Handler:   handler,
+		TLSConfig: tlsConfig,
 
 		// Request and response bodies can be large (e.g., image archives) and
 		// long (e.g., streaming exec), so r/w timeouts are left unset.
@@ -100,23 +115,13 @@ func newServer(handler http.Handler) *http.Server {
 
 // Serves until a termination signal arrives, then shuts down gracefully.
 func run(logger *slog.Logger, srv *http.Server) {
-	go func() {
-		logger.Info("starting cruxd", "addr", srv.Addr, "version", internal.VersionString())
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server failed", "error", err)
-			os.Exit(1)
-		}
-	}()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Info("shutting down cruxd")
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("forced shutdown", "error", err)
+	logger.Info("starting cruxd", "addr", srv.Addr, "version", internal.Build.String())
+	if err := httpx.Serve(ctx, srv, shutdownTimeout); err != nil {
+		logger.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+	logger.Info("cruxd stopped")
 }
