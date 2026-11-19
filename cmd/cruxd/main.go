@@ -14,77 +14,77 @@ import (
 
 	"github.com/cruciblehq/cruxd/agent"
 	"github.com/cruciblehq/cruxd/cmd/cruxd/internal"
-	"github.com/cruciblehq/cruxd/compute"
 	"github.com/cruciblehq/cruxd/identity"
-	speccompute "github.com/cruciblehq/spec/compute"
+	"github.com/cruciblehq/cruxd/server"
+	specagent "github.com/cruciblehq/spec/agent"
 	"github.com/cruciblehq/spec/trust"
 	"github.com/cruciblehq/utils-go/crex"
 	"github.com/cruciblehq/utils-go/httpx"
 )
 
-// Port allocation.
+// Control port configuration.
 //
-// The control port is the endpoint for the crux/cruxd API; it is reserved and
-// never reused. Published ports are assigned by cruxd from a range to services
-// to avoid conflicts with the control port and the OS ephemeral port range.
+// The control port serves the agent protocol to crux.
 const (
-
-	// Environment variable overriding the control port.
-	envPort = "CRUXD_PORT"
+	envPort = "CRUXD_PORT" // Environment variable overriding the control port.
 )
 
 // Server timeouts.
 const (
-
-	// Timeout for reading request headers.
-	readHeaderTimeout = 15 * time.Second
-
-	// Idle time before a keep-alive connection is closed.
-	idleTimeout = 120 * time.Second
-
-	// Grace period for in-flight requests to finish during shutdown.
-	shutdownTimeout = 10 * time.Second
+	readHeaderTimeout = 15 * time.Second  // Timeout for reading request headers.
+	idleTimeout       = 120 * time.Second // Idle time before a keep-alive connection is closed.
+	shutdownTimeout   = 10 * time.Second  // Grace period for in-flight requests to finish during shutdown.
 )
 
-// Returns the listen port (configured envPort, or the spec default).
+// Returns the control port, from [envPort] when set and the spec default otherwise.
 func port() string {
 	if p := os.Getenv(envPort); p != "" {
 		return p
 	}
-	return strconv.Itoa(speccompute.DefaultPort)
+	return strconv.Itoa(specagent.DefaultPort)
 }
 
-// Directory holding the machine identity once enrolled.
+// Environment variable holding the path of the enrollment data.
+//
+// Whoever provisions the machine writes the data and sets this. When it is
+// unset, the agent has no enrollment data.
+const envEnrollment = "CRUXD_ENROLLMENT"
+
+// Directory holding the agent identity once enrolled.
 const stateDir = "/var/lib/cruxd"
 
-// Starts the agent, connects to containerd, and runs until interrupted.
+// Loads the agent identity, starts the agent on containerd, and serves the
+// agent protocol until interrupted.
 func main() {
 	logger := newLogger()
 
-	id, err := identity.Load(stateDir, trust.EnrollmentPath)
+	id, err := identity.Load(stateDir, os.Getenv(envEnrollment))
 	if err != nil {
-		logger.Error("failed to load machine identity", "dir", stateDir, "error", err)
+		logger.Error("failed to load agent identity", "dir", stateDir, "error", err)
 		os.Exit(1)
 	}
 	if !id.Enrolled() {
-		logger.Info("machine is not enrolled, serving enrollment only")
+		logger.Info("agent is not enrolled, serving enrollment only")
 	}
 
-	// Connect to containerd
-	runtime, err := compute.New(compute.DefaultSocket, compute.DefaultNamespace)
+	client, err := agent.New(agent.DefaultSocket, agent.DefaultNamespace)
 	if err != nil {
-		logger.Error("failed to connect to containerd", "socket", compute.DefaultSocket, "error", err)
+		logger.Error("failed to connect to containerd", "socket", agent.DefaultSocket, "error", err)
 		os.Exit(1)
 	}
-	defer runtime.Close()
+	defer client.Close()
+	if err := client.Prune(context.Background()); err != nil {
+		logger.Error("failed to remove containers left by an earlier run", "error", err)
+		os.Exit(1)
+	}
 
-	build := agent.Build{
+	build := server.Build{
 		Version: internal.Build.Version(),
 		Commit:  internal.Build.Commit(),
 	}
 
 	tlsConfig := trust.ServerConfig(id.Certificate, id.Root(), id.Revocations)
-	run(logger, newServer(agent.New(runtime, id, build), tlsConfig))
+	run(logger, newServer(server.New(client, id, build), tlsConfig))
 }
 
 // Builds the logger.

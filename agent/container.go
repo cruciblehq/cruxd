@@ -1,9 +1,8 @@
-package compute
+package agent
 
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -25,17 +24,16 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
-	"github.com/cruciblehq/spec/compute"
+	"github.com/cruciblehq/spec/agent"
 	"github.com/cruciblehq/utils-go/crex"
 )
 
-// Container runtime limits and defaults.
+// Container limits and defaults.
 const (
+	defaultShell = "/bin/sh" // Shell used by default.
 
-	// Shell used by default.
-	defaultShell = "/bin/sh"
-
-	// DNS resolver configuration shared from the host into build containers.
+	// DNS resolver configuration shared from the machine into containers on the
+	// host network.
 	resolvConfPath = "/etc/resolv.conf"
 
 	// Maximum UID or GID accepted by runc. Runc requires values to fit in
@@ -43,14 +41,10 @@ const (
 	runcMaxID = 1<<31 - 1
 )
 
-// Suffixes appended to step IDs when naming container records and processes.
+// Suffixes appended to random IDs when naming container records and processes.
 const (
-
-	// Suffix appended to step IDs when naming container records.
-	containerIDSuffix = "container"
-
-	// Suffix appended to step IDs when naming exec processes.
-	execIDSuffix = "exec"
+	containerIDSuffix = "container" // Suffix appended to random IDs when naming container records.
+	execIDSuffix      = "exec"      // Suffix appended to random IDs when naming exec processes.
 )
 
 // Grace period for SIGTERM before SIGKILL is sent during Stop.
@@ -58,9 +52,7 @@ const stopGraceTimeout = 10 * time.Second
 
 // Overlay filesystem layout.
 const (
-
-	// Path of the rootfs directory within a containerd snapshot mount.
-	rootfsPath = "rootfs"
+	rootfsPath = "rootfs" // Path of the rootfs directory within a containerd snapshot mount.
 )
 
 // An isolation boundary with a persistent writable snapshot.
@@ -83,7 +75,7 @@ type Container struct {
 	config      *ocispec.ImageConfig         // OCI config override applied at Commit time; nil means use img's config.
 	snapshotID  string                       // Key of the active writable snapshot in the store.
 	snapshotter string                       // Snapshotter name ("overlayfs").
-	oci         specs.Spec                   // Compiled security spec; used as the runtime spec base.
+	oci         specs.Spec                   // OCI runtime spec the container spec starts from.
 	mu          sync.Mutex                   // Serialises Start, Stop, Exec, and Copy calls.
 	ctr         containerd.Container         // Running container record; nil when stopped.
 	task        containerd.Task              // Running task (PID 1); nil when stopped.
@@ -92,23 +84,22 @@ type Container struct {
 
 // Starts the container's main process.
 //
-// The process command is derived from the image's Entrypoint and Cmd fields,
-// which can be overridden via [Container.Configure] before calling Start. If
-// the image has neither, the OCI runtime rejects the spec at start time. The
-// container must not already be running; a second call returns an error. Use
-// [Container.Stop] to terminate the process and [Container.Destroy] to release
-// all resources.
+// The process command is derived from the image's Entrypoint and Cmd fields.
+// If the image has neither, a command that only keeps the container alive runs
+// instead, so commands can still run with [Container.Exec]. The container must
+// not already be running; a second call returns an error. Use [Container.Stop]
+// to terminate the process and [Container.Destroy] to release all resources.
 func (c *Container) Start(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.task != nil {
-		return crex.Tag(crex.Newf(ErrContainer, "container already started"), compute.ErrAlreadyStarted)
+		return crex.Tag(crex.Newf(ErrContainer, "container already started"), agent.ErrAlreadyStarted)
 	}
 
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
 
-	containerID := fmt.Sprintf("%s-%s", randHex(idLen), containerIDSuffix)
+	containerID := fmt.Sprintf("%s-%s", rand.Text(), containerIDSuffix)
 
 	// The spec is policy-free by default: a restrictive baseline (isolated
 	// network from the default platform spec). Relaxations are applied only
@@ -117,7 +108,7 @@ func (c *Container) Start(ctx context.Context) error {
 	specOpts := []oci.SpecOpts{
 		baseSpecOpt(c.oci),
 		oci.WithImageConfig(c.img),
-		withComputeFields(c.namespace, containerID),
+		withContainerdFields(c.namespace, containerID),
 		withKeepAliveArgs(),
 	}
 	if c.hostNetwork {
@@ -161,10 +152,10 @@ func (c *Container) Start(ctx context.Context) error {
 
 // Stops the container's main process.
 //
-// Sends SIGTERM and waits up to [stopGraceTimeout] seconds for a graceful exit
-// before sending SIGKILL. The writable snapshot is not affected; changes from
+// Sends SIGTERM and waits up to [stopGraceTimeout] for a graceful exit before
+// sending SIGKILL. The writable snapshot is not affected; changes from
 // [Container.Copy] and [Container.Exec] calls are preserved. Safe to call on
-// an already-stopped container.
+// a stopped container.
 func (c *Container) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	task, ctr, exitCh := c.task, c.ctr, c.exitCh
@@ -175,7 +166,7 @@ func (c *Container) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	cleanupCtx := namespaces.WithNamespace(context.Background(), c.namespace)
+	cleanupCtx := namespaces.WithNamespace(context.WithoutCancel(ctx), c.namespace)
 	_ = task.Kill(cleanupCtx, syscall.SIGTERM)
 
 	stopCtx, cancel := context.WithTimeout(cleanupCtx, stopGraceTimeout)
@@ -194,18 +185,19 @@ func (c *Container) Stop(ctx context.Context) error {
 
 // Runs a command in the container and returns its exit code.
 //
-// Execs the command into the container's running main process. The command is
-// invoked via opts.Shell (or the default shell) as a single argument. Changes
+// Runs the command as a new process beside the main process, which must be
+// running. The command is invoked as "shell -c command" with opts.Shell (or the
+// default shell). Changes
 // to the filesystem accumulate in the writable snapshot and persist for
 // subsequent [Container.Exec] and [Container.Copy] calls. A non-zero exit code
 // is a normal result. The error is reserved for a command that could not be
 // run or waited on.
-func (c *Container) Exec(ctx context.Context, stdout, stderr io.Writer, command string, opts compute.Options) (int, error) {
+func (c *Container) Exec(ctx context.Context, stdout, stderr io.Writer, command string, opts agent.Options) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.task == nil {
-		return 0, crex.Tag(crex.Newf(ErrContainer, "container not started"), compute.ErrNotStarted)
+		return 0, crex.Tag(crex.Newf(ErrContainer, "container not started"), agent.ErrNotStarted)
 	}
 
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
@@ -221,10 +213,8 @@ func (c *Container) Exec(ctx context.Context, stdout, stderr io.Writer, command 
 // accumulate in the snapshot. The container's main process is not affected.
 //
 // The tar is written to the content store and applied by the containerd diff
-// service, which mounts the snapshot and applies the layer server-side. This
-// avoids mounting the snapshot on the crux host, which is impossible when crux
-// runs on a different machine or OS than containerd (e.g. macOS driving a Linux
-// VM).
+// service, which mounts the snapshot itself. The agent never mounts the
+// snapshot.
 func (c *Container) Copy(ctx context.Context, r io.Reader) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -259,10 +249,10 @@ func (c *Container) Copy(ctx context.Context, r io.Reader) error {
 //
 // The digest and size are computed while the stream is written, so the caller
 // need not know them in advance. The descriptor uses the uncompressed OCI layer
-// media type, suitable for server-side application via the diff service. An
-// already-existing blob with the same digest is treated as success.
+// media type, so the diff service can apply it. An already-existing blob with
+// the same digest is treated as success.
 func writeLayerBlob(ctx context.Context, cs content.Store, r io.Reader) (ocispec.Descriptor, error) {
-	ref := fmt.Sprintf("crux-copy-layer-%s", randHex(idLen))
+	ref := fmt.Sprintf("copy-layer-%s", rand.Text())
 	w, err := content.OpenWriter(ctx, cs, content.WithRef(ref))
 	if err != nil {
 		return ocispec.Descriptor{}, crex.Wrapf(ErrContainer, err, "could not open content writer")
@@ -307,7 +297,7 @@ func (c *Container) Configure(_ context.Context, cfg ocispec.ImageConfig) error 
 // configuration. The reference can be passed to [Client.Load], [Client.Export],
 // [Client.Extract], or [Client.Remove]. The live container is not affected.
 // Records a history entry using by as the creator and the current time.
-func (c *Container) Commit(ctx context.Context, by string) (compute.ImageRef, error) {
+func (c *Container) Commit(ctx context.Context, by string) (agent.ImageRef, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -317,30 +307,39 @@ func (c *Container) Commit(ctx context.Context, by string) (compute.ImageRef, er
 	// Usage reports the size of this snapshot's writable layer (the overlay
 	// upperdir, or the whole filesystem for a parentless bind-mounted snapshot),
 	// so it detects changes regardless of how the snapshot is mounted and
-	// without reading any paths from the client host.
+	// without mounting it.
 	usage, err := c.conn.SnapshotService(c.snapshotter).Usage(ctx, c.snapshotID)
 	if err != nil {
 		return "", crex.Wrapf(ErrContainer, err, "could not get snapshot usage")
 	}
 	if usage.Size == 0 {
 		if c.config == nil {
-			return compute.ImageRef(c.img.Name()), nil
+			return agent.ImageRef(c.img.Name()), nil
 		}
 		ref, err := configureImage(ctx, c.conn, c.img, *c.config, by)
-		return compute.ImageRef(ref), err
+		return agent.ImageRef(ref), err
 	}
 	ref, err := commitSnapshotDiff(ctx, c.conn, c.img, c.snapshotID, c.snapshotter, c.config, by)
-	return compute.ImageRef(ref), err
+	return agent.ImageRef(ref), err
 }
 
-// Releases the container's writable snapshot.
+// Stops the container if it is running, then removes its writable snapshot
+// and its lease.
 //
-// After Destroy returns, no other methods may be called on the container.
+// A snapshot or lease that no longer exists is not an error. After Destroy
+// returns, no other methods may be called on the container.
 func (c *Container) Destroy(ctx context.Context) error {
+	if err := c.Stop(ctx); err != nil {
+		return err
+	}
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
-	c.conn.SnapshotService(c.snapshotter).Remove(ctx, c.snapshotID)
+	if err := c.conn.SnapshotService(c.snapshotter).Remove(ctx, c.snapshotID); err != nil && !errdefs.IsNotFound(err) {
+		return wrapContainerd(err)
+	}
 	if c.leaseID != "" {
-		_ = c.conn.LeasesService().Delete(ctx, leases.Lease{ID: c.leaseID})
+		if err := c.conn.LeasesService().Delete(ctx, leases.Lease{ID: c.leaseID}); err != nil && !errdefs.IsNotFound(err) {
+			return wrapContainerd(err)
+		}
 	}
 	return nil
 }
@@ -367,24 +366,30 @@ func (c *Container) Inspect(ctx context.Context) (ocispec.ImageConfig, error) {
 	return cfg.Config, nil
 }
 
-// Execs command into the running task and returns its exit code, routing
-// output through an [execIO].
-func (c *Container) runExec(ctx context.Context, stdout, stderr io.Writer, command string, opts *compute.Options) (int, error) {
-	execID := fmt.Sprintf("%s-%s", randHex(idLen), execIDSuffix)
-	eio := newExecIO(stdout, stderr)
-	defer eio.close()
-
-	creator, err := eio.creator()
-	if err != nil {
-		return 0, crex.Wrapf(ErrContainer, err, "could not create log IO")
+// Runs command as a new process in the running task and returns its exit code.
+//
+// Output streams live to stdout and stderr. A nil writer discards its stream.
+func (c *Container) runExec(ctx context.Context, stdout, stderr io.Writer, command string, opts *agent.Options) (int, error) {
+	execID := fmt.Sprintf("%s-%s", rand.Text(), execIDSuffix)
+	if stdout == nil {
+		stdout = io.Discard
 	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	creator := cio.NewCreator(cio.WithStreams(nil, stdout, stderr))
 
 	spec, err := c.ctr.Spec(ctx)
 	if err != nil {
 		return 0, crex.Wrapf(ErrContainer, err, "could not get container spec")
 	}
 
-	process, err := c.task.Exec(ctx, execID, buildExecProcess(spec, command, opts), creator)
+	proc, err := buildExecProcess(spec, command, opts)
+	if err != nil {
+		return 0, err
+	}
+
+	process, err := c.task.Exec(ctx, execID, proc, creator)
 	if err != nil {
 		return 0, crex.Wrapf(ErrContainer, err, "could not create exec process")
 	}
@@ -414,7 +419,11 @@ func (c *Container) runExec(ctx context.Context, stdout, stderr io.Writer, comma
 		execErr = ctx.Err()
 	}
 
-	eio.flush(process.IO())
+	// All output must reach the writers before the process is deleted.
+	if pio := process.IO(); pio != nil {
+		pio.Wait()
+		pio.Close()
+	}
 	process.Delete(ctx)
 
 	return code, execErr
@@ -422,8 +431,9 @@ func (c *Container) runExec(ctx context.Context, stdout, stderr io.Writer, comma
 
 // Builds a process spec for exec from the container's base process.
 //
-// Overrides args, env, workdir, and user from command and opts.
-func buildExecProcess(base *specs.Spec, command string, opts *compute.Options) *specs.Process {
+// Overrides args, env, workdir, and user from command and opts. Returns an
+// error when the user does not parse.
+func buildExecProcess(base *specs.Spec, command string, opts *agent.Options) (*specs.Process, error) {
 	proc := *base.Process
 	proc.Terminal = false
 
@@ -438,7 +448,7 @@ func buildExecProcess(base *specs.Spec, command string, opts *compute.Options) *
 		for k, v := range opts.Env {
 			env = append(env, fmt.Sprintf("%s=%s", k, v))
 		}
-		proc.Env = MergeEnv(proc.Env, env)
+		proc.Env = mergeEnv(proc.Env, env)
 	}
 
 	if opts.Workdir != "" {
@@ -447,15 +457,16 @@ func buildExecProcess(base *specs.Spec, command string, opts *compute.Options) *
 
 	if opts.User != "" {
 		uid, gid, err := parseUserSpec(opts.User)
-		if err == nil {
-			proc.User.UID = uid
-			if gid != nil {
-				proc.User.GID = *gid
-			}
+		if err != nil {
+			return nil, err
+		}
+		proc.User.UID = uid
+		if gid != nil {
+			proc.User.GID = *gid
 		}
 	}
 
-	return &proc
+	return &proc, nil
 }
 
 // Parses a user spec in "uid" or "uid:gid" format.
@@ -479,7 +490,7 @@ func parseUserSpec(user string) (uid uint32, gid *uint32, err error) {
 	return uid, gid, nil
 }
 
-// Parses a decimal integer as a process ID.
+// Parses a decimal integer as a user or group ID.
 //
 // Values above MaxInt32 are rejected to match runc's requirement, even though
 // they are valid uint32 values.
@@ -489,17 +500,15 @@ func parseID(s string) (uint32, error) {
 		return 0, err
 	}
 	if v > runcMaxID {
-		return 0, crex.New("exceeds runc maximum")
+		return 0, crex.Newf(ErrInvalidID, "ID %d is above the runc maximum of %d", v, runcMaxID)
 	}
 	return uint32(v), nil
 }
 
-// Choose the base spec option.
+// Returns the OCI spec option the container spec starts from.
 //
-// Returns an OCI spec option that either applies the given compiled security
-// spec if it is compiled, or falls back to the default platform spec. The
-// distinction is made based on whether the compiled security spec has a Linux
-// or Windows section.
+// Uses src when it has a Linux or Windows section, and the default platform
+// spec otherwise.
 func baseSpecOpt(src specs.Spec) oci.SpecOpts {
 	if src.Linux == nil && src.Windows == nil {
 		return oci.WithDefaultSpecForPlatform(fmt.Sprintf("linux/%s", runtime.GOARCH))
@@ -551,11 +560,11 @@ func withResolvConf() oci.SpecOpts {
 }
 
 // Copies src into the blank spec produced by [containerd.WithNewSpec] so the
-// compiled security spec becomes the starting point for the full container spec.
+// OCI runtime spec from [agent.Options] becomes the starting point for the
+// full container spec.
 //
 // Top-level pointer fields (Root, Process, Linux) are shallow-copied into new
-// structs so that subsequent SpecOpts can modify them without mutating the
-// original security spec.
+// structs so that subsequent SpecOpts can modify them without mutating src.
 func applyOCISpec(src specs.Spec) oci.SpecOpts {
 	return func(_ context.Context, _ oci.Client, _ *containers.Container, s *specs.Spec) error {
 		*s = src
@@ -575,22 +584,12 @@ func applyOCISpec(src specs.Spec) oci.SpecOpts {
 	}
 }
 
-// Sets the two fields the affordance package leaves empty because only the
-// container runtime knows them: the rootfs path (always "rootfs" under
-// containerd's overlayfs snapshotter) and the cgroup path.
-func withComputeFields(ns, id string) oci.SpecOpts {
+// Sets the two spec fields only containerd knows: the rootfs path (always
+// "rootfs" under containerd's overlayfs snapshotter) and the cgroup path.
+func withContainerdFields(ns, id string) oci.SpecOpts {
 	return func(_ context.Context, _ oci.Client, _ *containers.Container, s *specs.Spec) error {
 		s.Root.Path = rootfsPath
 		s.Linux.CgroupsPath = filepath.Join("/", ns, id)
 		return nil
 	}
-}
-
-// Returns n random bytes as a lowercase hex string.
-//
-// crypto/rand.Read never fails, so there is no error to return.
-func randHex(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)
 }

@@ -6,5 +6,5 @@ var (
 	ErrNoEnrollment    = crex.New("no enrollment data")
 	ErrAlreadyEnrolled = crex.New("already enrolled")
 	ErrInvalidState    = crex.New("invalid identity state")
-	ErrInvalidCert     = crex.New("invalid machine certificate")
+	ErrInvalidCert     = crex.New("invalid agent certificate")
 )

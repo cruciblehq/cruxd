@@ -149,6 +149,12 @@ func TestLoadNoEnrollment(t *testing.T) {
 	}
 }
 
+func TestLoadNoEnrollmentPath(t *testing.T) {
+	if _, err := Load(filepath.Join(t.TempDir(), "state"), ""); !errors.Is(err, ErrNoEnrollment) {
+		t.Errorf("Load() = %v, want %v", err, ErrNoEnrollment)
+	}
+}
+
 func TestLoadInvalidEnrollment(t *testing.T) {
 	dir := t.TempDir()
 	enrollment := filepath.Join(dir, "enrollment.json")

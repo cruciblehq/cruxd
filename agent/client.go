@@ -1,9 +1,10 @@
-package compute
+package agent
 
 import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/containerd/containerd/v2/core/images"
 	imgarchive "github.com/containerd/containerd/v2/core/images/archive"
 	"github.com/containerd/containerd/v2/core/leases"
+	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/rootfs"
 	"github.com/containerd/errdefs"
@@ -24,92 +26,56 @@ import (
 	imgspecs "github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
-	"github.com/cruciblehq/spec/compute"
+	"github.com/cruciblehq/spec/agent"
 	"github.com/cruciblehq/utils-go/crex"
 )
 
-// Number of random bytes in generated step, snapshot, and exec identifiers.
-const idLen = 8
-
-// Containerd runtime configuration.
+// Containerd configuration.
 const (
-
-	// OCI runtime used for containers.
-	runcV2Runtime = "io.containerd.runc.v2"
-
-	// Timeout for establishing the initial containerd gRPC connection.
-	connectTimeout = 10 * time.Second
-
-	// Timeout for one containerd health check.
-	healthTimeout = 5 * time.Second
-
-	// Snapshotter used for all container and image operations.
-	overlayfsSnapshotter = "overlayfs"
-
-	// Lifetime of the lease that protects a container's writable snapshot and
-	// build-time content from garbage collection. It is renewed implicitly by
-	// use and deleted when the container is destroyed; the expiration is a
-	// safety net so abandoned leases do not leak indefinitely.
-	leaseDuration = 24 * time.Hour
+	runcV2Runtime        = "io.containerd.runc.v2" // OCI runtime used for containers.
+	connectTimeout       = 10 * time.Second        // Timeout for establishing the initial containerd gRPC connection.
+	healthTimeout        = 5 * time.Second         // Timeout for one containerd health check.
+	overlayfsSnapshotter = "overlayfs"             // Snapshotter used for all container and image operations.
 )
 
-// Suffix appended to step IDs when naming writable snapshots.
+// Suffix appended to random IDs when naming writable snapshots.
 const snapshotIDSuffix = "snapshot"
 
 // Content store and image reference keys.
 const (
-
-	// Content store ref key prefix for image config blobs.
-	configBlobRefPrefix = "config"
-
-	// Content store ref key prefix for image manifest blobs.
-	manifestBlobRefPrefix = "manifest"
-
-	// Image service ref prefix for images built by crux.
-	buildImageRefPrefix = "crucible/build"
-
-	// Containerd GC label key that links a manifest to its config blob.
-	gcLabelConfig = "containerd.io/gc.ref.content.config"
-
-	// Format of the containerd GC label key that links a manifest to its layer at an index.
-	gcLabelLayerFormat = "containerd.io/gc.ref.content.l.%d"
-
-	// Schema version of OCI image manifests.
-	ociSchemaVersion = 2
+	configBlobRefPrefix   = "config"                              // Content store ref key prefix for image config blobs.
+	manifestBlobRefPrefix = "manifest"                            // Content store ref key prefix for image manifest blobs.
+	buildImageRefPrefix   = "crucible/build"                      // Image service ref prefix for images the agent commits.
+	gcLabelConfig         = "containerd.io/gc.ref.content.config" // Containerd GC label key that links a manifest to its config blob.
+	gcLabelLayerFormat    = "containerd.io/gc.ref.content.l.%d"   // Format of the containerd GC label key that links a manifest to its layer at an index.
+	ociSchemaVersion      = 2                                     // Schema version of OCI image manifests.
 )
 
 // OCI whiteout markers.
 const (
-
-	// Prefix used by OCI whiteout tar entries to mark deleted paths.
-	whiteoutPrefix = ".wh."
-
-	// Name of the opaque whiteout entry that deletes all siblings in a directory.
-	whiteoutOpaque = ".wh..wh..opq"
+	whiteoutPrefix = ".wh."         // Prefix used by OCI whiteout tar entries to mark deleted paths.
+	whiteoutOpaque = ".wh..wh..opq" // Name of the opaque whiteout entry that deletes all siblings in a directory.
 )
 
-// A live connection to containerd on a host.
+// The agent, implemented on containerd.
 //
-// A Client is a handle to containerd on a specific host, providing methods for
-// interacting with the host's containerd instance and image store. A client is
-// opened by calling [Backend.Connect] and must be closed when no longer needed.
-// The client owns the underlying containerd connection, so calling any method
-// after [Client.Close] results in undefined behaviour. Containers are created
-// via [Client.Load] and own all operations on their writable snapshot.
+// A Client works within the agent's containerd namespace, which holds the
+// agent's image store and containers. It is opened with [New] and must be
+// closed when no longer needed. It keeps its own containerd connection, so
+// calling any method after [Client.Close] results in undefined behaviour.
+// Containers are created with [Client.Load] and own all operations on their
+// writable snapshot.
 type Client struct {
-	conn      *containerd.Client // Underlying containerd client connection.
+	conn      *containerd.Client // Containerd connection.
 	namespace string             // Containerd namespace for all operations on this client.
 }
 
-// Connects to the containerd socket at path and returns a Client.
+// Connects to the containerd socket at path and returns the agent.
 //
-// The path should be the same as the one configured for the compute backend in
-// use. For the local backend, the default is "/run/containerd/containerd.sock".
-// This method sets default namespace and runtime options to match crux's usual
-// configurations. Methods using the client may override these defaults by using
-// namespaces.WithNamespace or oci.WithRuntime in their contexts or spec options,
-// but doing so is not recommended.
-func newClient(path, namespace string) (*Client, error) {
+// The usual path on the machine is [DefaultSocket]. All operations run in
+// namespace, and containers use runc v2 as the OCI runtime. Gives up connecting
+// after [connectTimeout] and returns [ErrConnect] on failure.
+func New(path, namespace string) (*Client, error) {
 	c, err := containerd.New(path,
 		containerd.WithDefaultNamespace(namespace),
 		containerd.WithDefaultRuntime(runcV2Runtime),
@@ -121,13 +87,14 @@ func newClient(path, namespace string) (*Client, error) {
 	return &Client{conn: c, namespace: namespace}, nil
 }
 
-// Imports an OCI image archive into the host's image store.
+// Imports an OCI image archive into the agent's image store.
 //
-// The returned reference is a unique identifier within crux's namespace
+// The returned reference is a unique identifier within the agent's namespace
 // and can be passed to [Client.Load], [Client.Export], [Client.Extract],
-// or [Client.Remove]. The archive must be in OCI tar format as produced
-// by [Client.Export]. The image is unpacked so all layer snapshots exist.
-func (c *Client) Import(ctx context.Context, r io.Reader) (compute.ImageRef, error) {
+// [Client.Inspect], or [Client.Remove]. The archive must be in OCI tar format
+// as produced by [Client.Export]. When the archive holds several images, only
+// the first is returned. The image is unpacked so all layer snapshots exist.
+func (c *Client) Import(ctx context.Context, r io.Reader) (agent.ImageRef, error) {
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
 	imgs, err := c.conn.Import(ctx, r)
 	if err != nil {
@@ -147,7 +114,7 @@ func (c *Client) Import(ctx context.Context, r io.Reader) (compute.ImageRef, err
 		return "", crex.Wrap(ErrImport, err)
 	}
 
-	return compute.ImageRef(img.Name()), nil
+	return agent.ImageRef(img.Name()), nil
 }
 
 // Exports the named image as an OCI tar archive.
@@ -155,7 +122,7 @@ func (c *Client) Import(ctx context.Context, r io.Reader) (compute.ImageRef, err
 // ref must be a reference returned by [Client.Import] or [Container.Commit].
 // The archive includes all layer blobs, manifests, and config descriptors and
 // can be re-imported via [Client.Import].
-func (c *Client) Export(ctx context.Context, ref compute.ImageRef, w io.Writer) error {
+func (c *Client) Export(ctx context.Context, ref agent.ImageRef, w io.Writer) error {
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
 	return c.conn.Export(ctx, w, imgarchive.WithImage(c.conn.ImageService(), string(ref)))
 }
@@ -167,7 +134,7 @@ func (c *Client) Export(ctx context.Context, ref compute.ImageRef, w io.Writer) 
 // through [path.Clean] before matching. Callers are responsible for resolving
 // path to its final form before calling. The returned [io.ReadCloser] must be
 // closed by the caller.
-func (c *Client) Extract(ctx context.Context, ref compute.ImageRef, path string) (io.ReadCloser, error) {
+func (c *Client) Extract(ctx context.Context, ref agent.ImageRef, path string) (io.ReadCloser, error) {
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
 	img, err := c.conn.GetImage(ctx, string(ref))
 	if err != nil {
@@ -182,11 +149,11 @@ func (c *Client) Extract(ctx context.Context, ref compute.ImageRef, path string)
 
 // Returns the OCI image config for the named image.
 //
-// The returned [ocispec.ImageConfig] contains the runtime defaults baked into
-// the image, which are the values in effect before [compute.Options] overrides
-// them at container start. ref must be a reference returned by [Client.Import]
-// or [Client.Commit].
-func (c *Client) Inspect(ctx context.Context, ref compute.ImageRef) (ocispec.ImageConfig, error) {
+// The returned [ocispec.ImageConfig] contains the execution defaults baked into
+// the image. [agent.Options] can override some of them when a command runs
+// with [Container.Exec]. ref must be a reference returned by [Client.Import]
+// or [Container.Commit].
+func (c *Client) Inspect(ctx context.Context, ref agent.ImageRef) (ocispec.ImageConfig, error) {
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
 	img, err := c.conn.GetImage(ctx, string(ref))
 	if err != nil {
@@ -204,7 +171,7 @@ func (c *Client) Inspect(ctx context.Context, ref compute.ImageRef) (ocispec.Ima
 // ref must be a reference returned by [Client.Import] or [Container.Commit].
 // The caller is responsible for ensuring no containers are using the image
 // before removing it.
-func (c *Client) Remove(ctx context.Context, ref compute.ImageRef) error {
+func (c *Client) Remove(ctx context.Context, ref agent.ImageRef) error {
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
 	return c.conn.ImageService().Delete(ctx, string(ref))
 }
@@ -212,10 +179,12 @@ func (c *Client) Remove(ctx context.Context, ref compute.ImageRef) error {
 // Creates a new container from a previously imported image.
 //
 // ref must be a reference returned by [Client.Import] or [Container.Commit].
-// Allocates a persistent writable snapshot with the image as parent. The
-// container is not started until [Container.Start] is called. The container
-// must be released by calling [Container.Destroy] when no longer needed.
-func (c *Client) Load(ctx context.Context, ref compute.ImageRef, opts compute.Options) (*Container, error) {
+// Allocates a persistent writable snapshot with the image as parent. opts
+// gives the OCI runtime spec the container starts from and whether it uses
+// the host network. The container is not started until [Container.Start] is
+// called. The container must be released by calling [Container.Destroy] when
+// no longer needed.
+func (c *Client) Load(ctx context.Context, ref agent.ImageRef, opts agent.Options) (agent.Container, error) {
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
 	img, err := c.conn.GetImage(ctx, string(ref))
 	if err != nil {
@@ -232,7 +201,7 @@ func (c *Client) Load(ctx context.Context, ref compute.ImageRef, opts compute.Op
 	// by any container record until Start, so without a lease the garbage
 	// collector can remove it mid-build (and with it its on-disk fs directory),
 	// which later breaks layer application.
-	lease, err := c.conn.LeasesService().Create(ctx, leases.WithRandomID(), leases.WithExpiration(leaseDuration))
+	lease, err := c.conn.LeasesService().Create(ctx, leases.WithRandomID())
 	if err != nil {
 		return nil, crex.Wrapf(ErrContainer, err, "could not create lease")
 	}
@@ -275,6 +244,77 @@ func (c *Client) Health(ctx context.Context) error {
 	return nil
 }
 
+// Removes every container, writable snapshot, and lease left in the namespace.
+//
+// Container handles live only in memory, so after cruxd restarts nothing can
+// reach what an earlier run left behind. Running tasks are killed. Images and
+// their layers are kept.
+func (c *Client) Prune(ctx context.Context) error {
+	ctx = namespaces.WithNamespace(ctx, c.namespace)
+	if err := c.pruneContainers(ctx); err != nil {
+		return err
+	}
+	if err := c.pruneLeases(ctx); err != nil {
+		return err
+	}
+	return c.pruneSnapshots(ctx)
+}
+
+// Kills the task of every container in the namespace and deletes the container.
+func (c *Client) pruneContainers(ctx context.Context) error {
+	ctrs, err := c.conn.Containers(ctx)
+	if err != nil {
+		return crex.Wrap(ErrContainer, err)
+	}
+	for _, ctr := range ctrs {
+		if task, err := ctr.Task(ctx, nil); err == nil {
+			if _, err := task.Delete(ctx, containerd.WithProcessKill); err != nil {
+				return crex.Wrap(ErrContainer, err)
+			}
+		}
+		if err := ctr.Delete(ctx); err != nil {
+			return crex.Wrap(ErrContainer, err)
+		}
+	}
+	return nil
+}
+
+// Deletes every lease in the namespace.
+func (c *Client) pruneLeases(ctx context.Context) error {
+	ls := c.conn.LeasesService()
+	all, err := ls.List(ctx)
+	if err != nil {
+		return crex.Wrap(ErrContainer, err)
+	}
+	for _, l := range all {
+		if err := ls.Delete(ctx, l); err != nil {
+			return crex.Wrap(ErrContainer, err)
+		}
+	}
+	return nil
+}
+
+// Removes every active (writable) snapshot in the namespace.
+func (c *Client) pruneSnapshots(ctx context.Context) error {
+	sn := c.conn.SnapshotService(overlayfsSnapshotter)
+	var active []string
+	err := sn.Walk(ctx, func(_ context.Context, info snapshots.Info) error {
+		if info.Kind == snapshots.KindActive {
+			active = append(active, info.Name)
+		}
+		return nil
+	})
+	if err != nil {
+		return crex.Wrap(ErrContainer, err)
+	}
+	for _, name := range active {
+		if err := sn.Remove(ctx, name); err != nil {
+			return crex.Wrap(ErrContainer, err)
+		}
+	}
+	return nil
+}
+
 // Closes the client and releases the underlying containerd connection.
 //
 // Does not affect images or running containers. After calling Close, the
@@ -286,8 +326,9 @@ func (c *Client) Close() error {
 // Prepares a new writable snapshot for img and returns its key.
 //
 // Computes the chain ID from img's diff IDs, then calls Prepare on the overlayfs
-// snapshotter. The returned key identifies the snapshot and must be passed to
-// [Container.Destroy] when the container is no longer needed.
+// snapshotter with that chain ID as parent. The returned key identifies the
+// snapshot. The container keeps it, and [Container.Destroy] removes the
+// snapshot.
 func (c *Client) prepareSnapshot(ctx context.Context, img containerd.Image) (string, error) {
 	diffIDs, err := img.RootFS(ctx)
 	if err != nil {
@@ -295,7 +336,7 @@ func (c *Client) prepareSnapshot(ctx context.Context, img containerd.Image) (str
 	}
 	parent := identity.ChainID(diffIDs).String()
 
-	snapshotID := fmt.Sprintf("%s-%s", randHex(idLen), snapshotIDSuffix)
+	snapshotID := fmt.Sprintf("%s-%s", rand.Text(), snapshotIDSuffix)
 	if _, err := c.conn.SnapshotService(overlayfsSnapshotter).Prepare(ctx, snapshotID, parent); err != nil {
 		return "", crex.Wrap(ErrContainer, err)
 	}
@@ -304,8 +345,8 @@ func (c *Client) prepareSnapshot(ctx context.Context, img containerd.Image) (str
 
 // Extracts src from img as an uncompressed tar stream written to w.
 //
-// Layers are scanned in order with last-writer-wins semantics; whiteout entries
-// are applied before writing. src is passed through [path.Clean] before matching.
+// Layers are scanned in order, and the last layer to write a path wins. Whiteout
+// entries are applied before writing. src is passed through [path.Clean] before matching.
 // Returns an error when src is not found in any layer.
 func (c *Client) streamExtract(ctx context.Context, img containerd.Image, src string, w io.Writer) error {
 	cs := c.conn.ContentStore()
@@ -321,13 +362,13 @@ func (c *Client) streamExtract(ctx context.Context, img containerd.Image, src st
 	}
 
 	if len(entries) == 0 {
-		return crex.Tag(crex.Newf(ErrContainer, "path %q not found in image", src), compute.ErrNotFound)
+		return crex.Tag(crex.Newf(ErrContainer, "path %q not found in image", src), agent.ErrNotFound)
 	}
 
 	return streamEntries(ctx, cs, mfst.Layers, entries, w)
 }
 
-// Returns a new image identical to img but with cfg as its runtime configuration.
+// Returns a new image identical to img but with cfg as its image configuration.
 //
 // cfg replaces the Config section of the OCI image. All remaining image fields
 // are inherited from img. A history entry is appended with by as the creator,
@@ -368,7 +409,8 @@ func readImageConfig(ctx context.Context, cs content.Store, target ocispec.Descr
 
 // Iterates layers in order and records the winning layer for each path under src.
 //
-// Uses last-writer-wins semantics; whiteout entries are applied as encountered.
+// The last layer to write a path wins. Whiteout entries are applied as they
+// are found.
 // No file data is read. Returns an error if any layer cannot be read, but not
 // if src is not found.
 func collectLayerEntries(ctx context.Context, cs content.Store, layers []ocispec.Descriptor, src string) (map[string]ocispec.Descriptor, error) {
@@ -532,7 +574,9 @@ func streamTarEntry(hdr *tar.Header, tr *tar.Reader, names map[string]struct{}, 
 // Commits the diff of snapshotID as a new image layer appended to img.
 //
 // Creates a temporary lease to protect the new blob from GC until the
-// manifest's GC labels are written. Returns the new image reference.
+// manifest's GC labels are written. When cfgOverride is non-nil it replaces
+// the image config. The history entry names by as the creator. Returns the new
+// image reference.
 func commitSnapshotDiff(ctx context.Context, conn *containerd.Client, img containerd.Image, snapshotID, snapshotterName string, cfgOverride *ocispec.ImageConfig, by string) (string, error) {
 	leaseCtx, doneLease, err := conn.WithLease(ctx)
 	if err != nil {
@@ -646,7 +690,7 @@ func writeImageManifest(ctx context.Context, conn *containerd.Client, parentMfst
 //
 // The descriptor is computed from the raw JSON bytes before writing, so the
 // digest and size are always consistent with the stored content. The content
-// store ref key is the encoded digest with a configBlobRef prefix. WriteBlob
+// store ref key is the encoded digest with a [configBlobRefPrefix]. WriteBlob
 // is idempotent, so calling this with an identical config is safe. Returns the
 // descriptor for the written blob.
 func writeConfigBlob(ctx context.Context, cs content.Store, cfg ocispec.Image) (ocispec.Descriptor, error) {
@@ -703,7 +747,7 @@ func writeManifestBlob(ctx context.Context, cs content.Store, mfst ocispec.Manif
 // Registers the given manifest descriptor in the containerd image service.
 //
 // The name is derived from the first 16 hex characters of the manifest digest,
-// prefixed with buildImageRefPrefix. If a record for that name already exists
+// prefixed with [buildImageRefPrefix]. If a record for that name already exists
 // it is updated in place rather than returning an error, so the call is safe
 // to repeat for the same manifest. Returns the reference assigned to the image.
 func registerImageRef(ctx context.Context, conn *containerd.Client, mfstDesc ocispec.Descriptor) (string, error) {

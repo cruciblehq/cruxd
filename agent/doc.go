@@ -1,5 +1,7 @@
-// Package agent implements the cruxd (server) side of the compute contract.
+// Package agent is the agent, implemented on containerd.
 //
-// It routes HTTP requests for the endpoints defined in the spec to a backing
-// spec/compute Runtime.
+// [Client] implements the Agent interface of spec/agent. It stores images in
+// containerd, creates containers from them, and removes what an earlier run
+// left behind. [Container] implements the Container interface of spec/agent
+// and runs and commits one container.
 package agent

@@ -1,9 +1,9 @@
-package agent
+package server
 
 import (
 	"sync"
 
-	"github.com/cruciblehq/spec/compute"
+	"github.com/cruciblehq/spec/agent"
 )
 
 // Tracks live containers by handle.
@@ -12,26 +12,26 @@ import (
 // operations look it up by that handle, and Destroy removes it. Safe for
 // concurrent use.
 type registry struct {
-	mu         sync.Mutex                                // Protects the containers map from concurrent access
-	containers map[compute.ContainerID]compute.Container // Maps container IDs to their corresponding container instances
+	mu         sync.Mutex                            // Protects the containers map from concurrent access.
+	containers map[agent.ContainerID]agent.Container // Live containers by handle.
 }
 
 // Creates an empty registry.
 func newRegistry() *registry {
 	return &registry{
-		containers: make(map[compute.ContainerID]compute.Container),
+		containers: make(map[agent.ContainerID]agent.Container),
 	}
 }
 
 // Registers c under id.
-func (r *registry) add(id compute.ContainerID, c compute.Container) {
+func (r *registry) add(id agent.ContainerID, c agent.Container) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.containers[id] = c
 }
 
 // Returns the container registered under id, if any.
-func (r *registry) get(id compute.ContainerID) (compute.Container, bool) {
+func (r *registry) get(id agent.ContainerID) (agent.Container, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	c, ok := r.containers[id]
@@ -39,7 +39,7 @@ func (r *registry) get(id compute.ContainerID) (compute.Container, bool) {
 }
 
 // Removes the container registered under id.
-func (r *registry) remove(id compute.ContainerID) {
+func (r *registry) remove(id agent.ContainerID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.containers, id)

@@ -1,4 +1,4 @@
-package agent
+package server
 
 import (
 	"bytes"
@@ -10,23 +10,23 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/cruciblehq/spec/compute"
+	"github.com/cruciblehq/spec/agent"
 	"github.com/cruciblehq/spec/trust"
 )
 
-type fakeRuntime struct {
+type fakeAgent struct {
 	ctr *fakeContainer
 	err error
 }
 
-func (f *fakeRuntime) Import(context.Context, io.Reader) (compute.ImageRef, error) {
+func (f *fakeAgent) Import(context.Context, io.Reader) (agent.ImageRef, error) {
 	if f.err != nil {
 		return "", f.err
 	}
 	return "img:imported", nil
 }
 
-func (f *fakeRuntime) Export(_ context.Context, _ compute.ImageRef, w io.Writer) error {
+func (f *fakeAgent) Export(_ context.Context, _ agent.ImageRef, w io.Writer) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -34,25 +34,25 @@ func (f *fakeRuntime) Export(_ context.Context, _ compute.ImageRef, w io.Writer)
 	return err
 }
 
-func (f *fakeRuntime) Extract(context.Context, compute.ImageRef, string) (io.ReadCloser, error) {
+func (f *fakeAgent) Extract(context.Context, agent.ImageRef, string) (io.ReadCloser, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	return io.NopCloser(bytes.NewReader([]byte("tar"))), nil
 }
 
-func (f *fakeRuntime) Inspect(context.Context, compute.ImageRef) (compute.ImageConfig, error) {
+func (f *fakeAgent) Inspect(context.Context, agent.ImageRef) (agent.ImageConfig, error) {
 	if f.err != nil {
-		return compute.ImageConfig{}, f.err
+		return agent.ImageConfig{}, f.err
 	}
-	return compute.ImageConfig{User: "image"}, nil
+	return agent.ImageConfig{User: "image"}, nil
 }
 
-func (f *fakeRuntime) Remove(context.Context, compute.ImageRef) error {
+func (f *fakeAgent) Remove(context.Context, agent.ImageRef) error {
 	return f.err
 }
 
-func (f *fakeRuntime) Load(context.Context, compute.ImageRef, compute.Options) (compute.Container, error) {
+func (f *fakeAgent) Load(context.Context, agent.ImageRef, agent.Options) (agent.Container, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -61,11 +61,11 @@ func (f *fakeRuntime) Load(context.Context, compute.ImageRef, compute.Options) (
 	}
 	return f.ctr, nil
 }
-func (f *fakeRuntime) Health(context.Context) error {
+func (f *fakeAgent) Health(context.Context) error {
 	return f.err
 }
 
-func (f *fakeRuntime) Close() error { return nil }
+func (f *fakeAgent) Close() error { return nil }
 
 type fakeIdentity struct {
 	unenrolled  bool
@@ -101,13 +101,10 @@ func (f *fakeIdentity) UpdateRevocations(der []byte) error {
 }
 
 func TestServeHTTPNotEnrolled(t *testing.T) {
-	srv := httptest.NewServer(New(&fakeRuntime{}, &fakeIdentity{unenrolled: true}, Build{}))
+	srv := httptest.NewServer(New(&fakeAgent{}, &fakeIdentity{unenrolled: true}, Build{}))
 	defer srv.Close()
 
-	resp, err := http.Get(fmt.Sprintf("%s%s", srv.URL, compute.EndpointHealth))
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
+	resp := post(t, fmt.Sprintf("%s%s", srv.URL, agent.EndpointHealth), agent.MediaTypeHealthRequest, agent.HealthRequest{})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
@@ -115,10 +112,10 @@ func TestServeHTTPNotEnrolled(t *testing.T) {
 }
 
 func TestServeHTTPAlreadyEnrolled(t *testing.T) {
-	srv := httptest.NewServer(New(&fakeRuntime{}, enrolled(), Build{}))
+	srv := httptest.NewServer(New(&fakeAgent{}, enrolled(), Build{}))
 	defer srv.Close()
 
-	resp, err := http.Post(fmt.Sprintf("%s%s", srv.URL, compute.EndpointEnroll), "", nil)
+	resp, err := http.Post(fmt.Sprintf("%s%s", srv.URL, agent.EndpointEnroll), "", nil)
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -129,7 +126,7 @@ func TestServeHTTPAlreadyEnrolled(t *testing.T) {
 }
 
 func TestServeHTTPUnknownPath(t *testing.T) {
-	srv := httptest.NewServer(New(&fakeRuntime{}, enrolled(), Build{}))
+	srv := httptest.NewServer(New(&fakeAgent{}, enrolled(), Build{}))
 	defer srv.Close()
 
 	resp, err := http.Get(fmt.Sprintf("%s/does-not-exist", srv.URL))
@@ -143,10 +140,10 @@ func TestServeHTTPUnknownPath(t *testing.T) {
 }
 
 func TestServeHTTPWrongMethod(t *testing.T) {
-	srv := httptest.NewServer(New(&fakeRuntime{}, enrolled(), Build{}))
+	srv := httptest.NewServer(New(&fakeAgent{}, enrolled(), Build{}))
 	defer srv.Close()
 
-	resp, err := http.Get(fmt.Sprintf("%s%s", srv.URL, compute.EndpointLoad)) // Load is POST-only.
+	resp, err := http.Get(fmt.Sprintf("%s%s", srv.URL, agent.EndpointLoad)) // Load is POST-only.
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}

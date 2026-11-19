@@ -1,4 +1,4 @@
-package compute
+package agent
 
 import (
 	"strings"
@@ -8,8 +8,8 @@ import (
 //
 // Each entry is "KEY=value". When the same key appears in both slices the
 // override entry is kept and the base entry is dropped. Entries without an
-// '=' separator are kept as-is from base.
-func MergeEnv(base, overrides []string) []string {
+// '=' separator are kept from base unchanged.
+func mergeEnv(base, overrides []string) []string {
 	overrideKeys := make(map[string]struct{}, len(overrides))
 	for _, e := range overrides {
 		if idx := strings.IndexByte(e, '='); idx > 0 {

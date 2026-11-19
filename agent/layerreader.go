@@ -1,4 +1,4 @@
-package compute
+package agent
 
 import (
 	"compress/gzip"
@@ -14,9 +14,9 @@ import (
 
 // An io.ReadCloser over a layer blob (possibly compressed).
 type layerReader struct {
-	io.Reader
-	ra io.Closer    // ReaderAt for the underlying content.
-	gr *gzip.Reader // nil for uncompressed layers
+	io.Reader              // Layer content, decompressed for gzip layers.
+	ra        io.Closer    // ReaderAt for the underlying content.
+	gr        *gzip.Reader // Gzip reader; nil for uncompressed layers.
 }
 
 // Closes the gzip reader (if any) and the underlying content.ReaderAt.

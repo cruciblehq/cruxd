@@ -1,14 +1,14 @@
-package agent
+package server
 
 import (
 	"testing"
 
-	"github.com/cruciblehq/spec/compute"
+	"github.com/cruciblehq/spec/agent"
 )
 
 func TestRegistry(t *testing.T) {
 	r := newRegistry()
-	id := compute.ContainerID("handle-1")
+	id := agent.ContainerID("handle-1")
 
 	if _, ok := r.get(id); ok {
 		t.Fatal("empty registry returned a container")
