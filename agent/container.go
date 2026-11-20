@@ -143,13 +143,14 @@ func (c *Container) specOpts(id string) []oci.SpecOpts {
 
 // Creates and starts the main task of ctn and returns it with its exit channel.
 //
-// The task is deleted again when any step fails.
+// The exit channel outlives ctx, because the task keeps running after the
+// request that started it ends. The task is deleted again when any step fails.
 func startTask(ctx context.Context, ctn containerd.Container) (containerd.Task, <-chan containerd.ExitStatus, error) {
 	task, err := ctn.NewTask(ctx, cio.NullIO)
 	if err != nil {
 		return nil, nil, crex.Wrapf(ErrContainer, err, "could not create task")
 	}
-	exitCh, err := task.Wait(ctx)
+	exitCh, err := task.Wait(context.WithoutCancel(ctx))
 	if err != nil {
 		task.Delete(ctx)
 		return nil, nil, crex.Wrapf(ErrContainer, err, "could not wait for task")
@@ -164,9 +165,9 @@ func startTask(ctx context.Context, ctn containerd.Container) (containerd.Task, 
 // Stops the container's main process.
 //
 // Sends SIGTERM and waits up to [stopGraceTimeout] for a graceful exit before
-// sending SIGKILL. The writable snapshot is not affected; changes from
-// [Container.Copy] and [Container.Exec] calls are preserved. Safe to call on
-// a stopped container.
+// sending SIGKILL, then deletes the task and the container record. The
+// writable snapshot is not affected; changes from [Container.Copy] and
+// [Container.Exec] calls are preserved. Safe to call on a stopped container.
 func (c *Container) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	task, ctr, exitCh := c.task, c.ctr, c.exitCh
@@ -189,8 +190,12 @@ func (c *Container) Stop(ctx context.Context) error {
 		<-exitCh
 	}
 
-	task.Delete(cleanupCtx)
-	ctr.Delete(cleanupCtx)
+	if _, err := task.Delete(cleanupCtx); err != nil && !errdefs.IsNotFound(err) {
+		return wrapContainerd(err)
+	}
+	if err := ctr.Delete(cleanupCtx); err != nil && !errdefs.IsNotFound(err) {
+		return wrapContainerd(err)
+	}
 	return nil
 }
 
