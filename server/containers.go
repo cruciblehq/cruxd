@@ -34,7 +34,7 @@ func (s *Server) lookup(w http.ResponseWriter, id agent.ContainerID) (agent.Cont
 func (s *Server) load(w http.ResponseWriter, r *http.Request) {
 	var req agent.LoadRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeLoadRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid load request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid load request")
 		return
 	}
 	c, err := s.agent.Load(r.Context(), req.Ref, req.Options)
@@ -55,7 +55,7 @@ func (s *Server) load(w http.ResponseWriter, r *http.Request) {
 func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 	var req agent.StartRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeStartRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid start request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid start request")
 		return
 	}
 	c, err := s.lookup(w, req.ID)
@@ -73,7 +73,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	var req agent.StopRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeStopRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid stop request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid stop request")
 		return
 	}
 	c, err := s.lookup(w, req.ID)
@@ -113,7 +113,7 @@ func (s *Server) copyLayer(w http.ResponseWriter, r *http.Request) {
 func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
 	var req agent.CommitRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeCommitRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid commit request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid commit request")
 		return
 	}
 	c, err := s.lookup(w, req.ID)
@@ -132,7 +132,7 @@ func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) configure(w http.ResponseWriter, r *http.Request) {
 	var req agent.ConfigureRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeConfigureRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid configure request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid configure request")
 		return
 	}
 	c, err := s.lookup(w, req.ID)
@@ -150,7 +150,7 @@ func (s *Server) configure(w http.ResponseWriter, r *http.Request) {
 func (s *Server) inspectContainer(w http.ResponseWriter, r *http.Request) {
 	var req agent.InspectContainerRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeInspectContainerRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid inspect request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid inspect request")
 		return
 	}
 	c, err := s.lookup(w, req.ID)
@@ -169,7 +169,7 @@ func (s *Server) inspectContainer(w http.ResponseWriter, r *http.Request) {
 func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 	var req agent.DestroyRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeDestroyRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid destroy request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid destroy request")
 		return
 	}
 	c, err := s.lookup(w, req.ID)

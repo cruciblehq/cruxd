@@ -90,39 +90,25 @@ func removeEnrollment(path string) error {
 
 // Loads a saved identity from dir.
 func load(dir string) (*Identity, error) {
-	signer, err := pki.NewDirKeyStore(dir).Load(keyName)
-	if err != nil {
-		return nil, crex.Wrap(ErrInvalidState, err)
-	}
-	key, ok := signer.(ed25519.PrivateKey)
-	if !ok {
-		return nil, crex.Newf(ErrInvalidState, "unexpected key type %T", signer)
-	}
-
-	machine, err := os.ReadFile(filepath.Join(dir, machineFile))
-	if err != nil {
-		return nil, crex.Wrap(ErrInvalidState, err)
-	}
-	id := trust.MachineID(machine)
-	if err := id.Validate(); err != nil {
-		return nil, err
-	}
-
-	root, err := pki.ReadCertificate(filepath.Join(dir, rootFile))
-	if err != nil {
-		return nil, crex.Wrap(ErrInvalidState, err)
-	}
-	crlDER, err := os.ReadFile(filepath.Join(dir, revocationsFile))
-	if err != nil {
-		return nil, crex.Wrap(ErrInvalidState, err)
-	}
-	crl, err := trust.ParseRevocations(crlDER, root)
+	key, err := loadKey(dir)
 	if err != nil {
 		return nil, err
 	}
-	cert, err := pki.ReadCertificate(filepath.Join(dir, certFile))
+	id, err := loadMachineID(dir)
 	if err != nil {
-		return nil, crex.Wrap(ErrInvalidState, err)
+		return nil, err
+	}
+	root, err := loadCertificate(dir, rootFile)
+	if err != nil {
+		return nil, err
+	}
+	crl, err := loadRevocations(dir, root)
+	if err != nil {
+		return nil, err
+	}
+	cert, err := loadCertificate(dir, certFile)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Identity{
@@ -133,6 +119,54 @@ func load(dir string) (*Identity, error) {
 		cert:    &tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: key, Leaf: cert},
 		crl:     crl,
 	}, nil
+}
+
+// Loads the agent key from the key store in dir.
+func loadKey(dir string) (ed25519.PrivateKey, error) {
+	signer, err := pki.NewDirKeyStore(dir).Load(keyName)
+	if err != nil {
+		return nil, crex.Wrap(ErrInvalidState, err)
+	}
+	key, ok := signer.(ed25519.PrivateKey)
+	if !ok {
+		return nil, crex.Newf(ErrInvalidState, "unexpected key type %T", signer)
+	}
+	return key, nil
+}
+
+// Reads and validates the machine identifier saved in dir.
+func loadMachineID(dir string) (trust.MachineID, error) {
+	data, err := os.ReadFile(filepath.Join(dir, machineFile))
+	if err != nil {
+		return "", crex.Wrap(ErrInvalidState, err)
+	}
+	id := trust.MachineID(data)
+	if err := id.Validate(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// Reads and parses the DER certificate in the file name in dir.
+func loadCertificate(dir, name string) (*x509.Certificate, error) {
+	der, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return nil, crex.Wrap(ErrInvalidState, err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, crex.Wrap(ErrInvalidState, err)
+	}
+	return cert, nil
+}
+
+// Reads the revocation list saved in dir and checks that root signed it.
+func loadRevocations(dir string, root *x509.Certificate) (*x509.RevocationList, error) {
+	der, err := os.ReadFile(filepath.Join(dir, revocationsFile))
+	if err != nil {
+		return nil, crex.Wrap(ErrInvalidState, err)
+	}
+	return trust.ParseRevocations(der, root)
 }
 
 // Reads the enrollment data, generates a new key, and signs a certificate

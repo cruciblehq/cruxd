@@ -100,54 +100,65 @@ func (c *Container) Start(ctx context.Context) error {
 	ctx = namespaces.WithNamespace(ctx, c.namespace)
 
 	containerID := fmt.Sprintf("%s-%s", rand.Text(), containerIDSuffix)
-
-	// The spec is policy-free by default: a restrictive baseline (isolated
-	// network from the default platform spec). Relaxations are applied only
-	// when the container was created with them, keeping container management
-	// independent of what the container is used for.
-	specOpts := []oci.SpecOpts{
-		baseSpecOpt(c.oci),
-		oci.WithImageConfig(c.img),
-		withContainerdFields(c.namespace, containerID),
-		withKeepAliveArgs(),
-	}
-	if c.hostNetwork {
-		specOpts = append(specOpts, oci.WithHostNamespace(specs.NetworkNamespace), withResolvConf())
-	}
-
 	ctn, err := c.conn.NewContainer(ctx, containerID,
 		containerd.WithImage(c.img),
 		containerd.WithSnapshotter(c.snapshotter),
 		containerd.WithSnapshot(c.snapshotID),
-		containerd.WithNewSpec(specOpts...),
+		containerd.WithNewSpec(c.specOpts(containerID)...),
 	)
 	if err != nil {
 		return crex.Wrapf(ErrContainer, err, "could not create container")
 	}
 
-	task, err := ctn.NewTask(ctx, cio.NullIO)
+	task, exitCh, err := startTask(ctx, ctn)
 	if err != nil {
 		ctn.Delete(ctx)
-		return crex.Wrapf(ErrContainer, err, "could not create task")
-	}
-
-	exitCh, err := task.Wait(ctx)
-	if err != nil {
-		task.Delete(ctx)
-		ctn.Delete(ctx)
-		return crex.Wrapf(ErrContainer, err, "could not wait for task")
-	}
-
-	if err := task.Start(ctx); err != nil {
-		task.Delete(ctx)
-		ctn.Delete(ctx)
-		return crex.Wrapf(ErrContainer, err, "could not start task")
+		return err
 	}
 
 	c.ctr = ctn
 	c.task = task
 	c.exitCh = exitCh
 	return nil
+}
+
+// Returns the options that build the OCI spec of the container record id.
+//
+// The spec is policy-free by default: a restrictive baseline (isolated network
+// from the default platform spec). Relaxations are applied only when the
+// container was created with them, keeping container management independent
+// of what the container is used for.
+func (c *Container) specOpts(id string) []oci.SpecOpts {
+	opts := []oci.SpecOpts{
+		baseSpecOpt(c.oci),
+		oci.WithImageConfig(c.img),
+		withContainerdFields(c.namespace, id),
+		withKeepAliveArgs(),
+	}
+	if c.hostNetwork {
+		opts = append(opts, oci.WithHostNamespace(specs.NetworkNamespace), withResolvConf())
+	}
+	return opts
+}
+
+// Creates and starts the main task of ctn and returns it with its exit channel.
+//
+// The task is deleted again when any step fails.
+func startTask(ctx context.Context, ctn containerd.Container) (containerd.Task, <-chan containerd.ExitStatus, error) {
+	task, err := ctn.NewTask(ctx, cio.NullIO)
+	if err != nil {
+		return nil, nil, crex.Wrapf(ErrContainer, err, "could not create task")
+	}
+	exitCh, err := task.Wait(ctx)
+	if err != nil {
+		task.Delete(ctx)
+		return nil, nil, crex.Wrapf(ErrContainer, err, "could not wait for task")
+	}
+	if err := task.Start(ctx); err != nil {
+		task.Delete(ctx)
+		return nil, nil, crex.Wrapf(ErrContainer, err, "could not start task")
+	}
+	return task, exitCh, nil
 }
 
 // Stops the container's main process.
@@ -405,19 +416,7 @@ func (c *Container) runExec(ctx context.Context, stdout, stderr io.Writer, comma
 		return 0, crex.Wrapf(ErrContainer, err, "could not start exec process")
 	}
 
-	var code int
-	var execErr error
-	select {
-	case status := <-exitCh:
-		if err := status.Error(); err != nil {
-			execErr = crex.Wrapf(ErrContainer, err, "exec process failed")
-		} else {
-			code = int(status.ExitCode())
-		}
-	case <-ctx.Done():
-		process.Kill(ctx, syscall.SIGTERM)
-		execErr = ctx.Err()
-	}
+	code, execErr := waitExec(ctx, process, exitCh)
 
 	// All output must reach the writers before the process is deleted.
 	if pio := process.IO(); pio != nil {
@@ -427,6 +426,23 @@ func (c *Container) runExec(ctx context.Context, stdout, stderr io.Writer, comma
 	process.Delete(ctx)
 
 	return code, execErr
+}
+
+// Waits for process to exit and returns its exit code.
+//
+// When ctx ends first, the process gets SIGTERM and the context error is
+// returned.
+func waitExec(ctx context.Context, process containerd.Process, exitCh <-chan containerd.ExitStatus) (int, error) {
+	select {
+	case status := <-exitCh:
+		if err := status.Error(); err != nil {
+			return 0, crex.Wrapf(ErrContainer, err, "exec process failed")
+		}
+		return int(status.ExitCode()), nil
+	case <-ctx.Done():
+		process.Kill(ctx, syscall.SIGTERM)
+		return 0, ctx.Err()
+	}
 }
 
 // Builds a process spec for exec from the container's base process.

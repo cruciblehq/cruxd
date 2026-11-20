@@ -12,16 +12,16 @@ import (
 // crux sends its supported protocol version and its newest revocation list.
 // The agent stores the list if it is newer and answers with its own version and
 // build identity so each side can refuse an incompatible peer. A malformed
-// request or revocation list is a transport failure and gets a non-2xx status.
+// request or revocation list gets a bad request error.
 func (s *Server) handshake(w http.ResponseWriter, r *http.Request) {
 	var req agent.HandshakeRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeHandshakeRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid handshake request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid handshake request")
 		return
 	}
 	if len(req.Revocations) > 0 {
 		if err := s.identity.UpdateRevocations(req.Revocations); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			_ = s.failOp(w, agent.ErrorCodeBadRequest, err.Error())
 			return
 		}
 	}

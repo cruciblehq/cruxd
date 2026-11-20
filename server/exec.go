@@ -16,7 +16,7 @@ import (
 func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	var req agent.ExecRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeExecRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid exec request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid exec request")
 		return
 	}
 	c, err := s.lookup(w, req.ID)
@@ -28,10 +28,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	stream := agent.NewExecWriter(w)
-	stdout := &execWriter{stream: stream, channel: agent.ChannelStdout}
-	stderr := &execWriter{stream: stream, channel: agent.ChannelStderr}
-
-	code, err := c.Exec(r.Context(), stdout, stderr, req.Command, req.Options)
+	code, err := c.Exec(r.Context(), stream.Channel(agent.ChannelStdout), stream.Channel(agent.ChannelStderr), req.Command, req.Options)
 	_ = stream.Send(terminal(code, err))
 }
 

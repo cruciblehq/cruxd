@@ -60,7 +60,7 @@ func (s *Server) extractImage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) inspectImage(w http.ResponseWriter, r *http.Request) {
 	var req agent.InspectImageRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeInspectImageRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid inspect request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid inspect request")
 		return
 	}
 	cfg, err := s.agent.Inspect(r.Context(), req.Ref)
@@ -75,7 +75,7 @@ func (s *Server) inspectImage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeImage(w http.ResponseWriter, r *http.Request) {
 	var req agent.RemoveRequest
 	if err := httpx.DecodeRequest(r, agent.MediaTypeRemoveRequest, agent.BodyFormat, &req); err != nil {
-		http.Error(w, "invalid remove request", http.StatusBadRequest)
+		_ = s.failOp(w, agent.ErrorCodeBadRequest, "invalid remove request")
 		return
 	}
 	if err := s.agent.Remove(r.Context(), req.Ref); err != nil {
