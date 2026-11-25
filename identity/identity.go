@@ -17,11 +17,10 @@ import (
 	"github.com/cruciblehq/utils-go/codec"
 	"github.com/cruciblehq/utils-go/crex"
 	"github.com/cruciblehq/utils-go/file"
-	"github.com/cruciblehq/utils-go/pki"
 )
 
-// Name of the agent key in the state directory's key store.
-const keyName = "machine"
+// Name of the agent key file in the state directory.
+const keyName = "machine.key"
 
 // Files in the state directory.
 const (
@@ -121,15 +120,15 @@ func load(dir string) (*Identity, error) {
 	}, nil
 }
 
-// Loads the agent key from the key store in dir.
+// Reads the agent key file in dir.
 func loadKey(dir string) (ed25519.PrivateKey, error) {
-	signer, err := pki.NewDirKeyStore(dir).Load(keyName)
+	der, err := os.ReadFile(filepath.Join(dir, keyName))
 	if err != nil {
 		return nil, crex.Wrap(ErrInvalidState, err)
 	}
-	key, ok := signer.(ed25519.PrivateKey)
-	if !ok {
-		return nil, crex.Newf(ErrInvalidState, "unexpected key type %T", signer)
+	key, err := trust.DecodeKey(der)
+	if err != nil {
+		return nil, crex.Wrap(ErrInvalidState, err)
 	}
 	return key, nil
 }
@@ -192,8 +191,8 @@ func prepare(dir, enrollment string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	tmpl := pki.LeafTemplate(e.Machine.Name(), pki.ValidFor(enrollCertLifetime), x509.ExtKeyUsageServerAuth, e.Machine.Name())
-	cert, err := pki.Sign(tmpl, nil, pub, key)
+	tmpl := trust.LeafTemplate(e.Machine.Name(), trust.ValidFor(enrollCertLifetime), x509.ExtKeyUsageServerAuth, e.Machine.Name())
+	cert, err := trust.Sign(tmpl, nil, pub, key)
 	if err != nil {
 		return nil, err
 	}
@@ -338,13 +337,15 @@ func (i *Identity) save(cert *x509.Certificate) error {
 	if err := os.MkdirAll(i.dir, file.OwnerDirMode); err != nil {
 		return err
 	}
-	if err := pki.NewDirKeyStore(i.dir).Store(keyName, i.key); err != nil {
+	key, err := trust.EncodeKey(i.key)
+	if err != nil {
 		return err
 	}
 	files := []struct {
 		name string
 		data []byte
 	}{
+		{keyName, key},
 		{machineFile, []byte(i.machine)},
 		{rootFile, i.root.Raw},
 		{revocationsFile, i.crl.Raw},

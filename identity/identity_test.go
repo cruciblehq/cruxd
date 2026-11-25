@@ -14,7 +14,6 @@ import (
 	"github.com/cruciblehq/spec/trust"
 	"github.com/cruciblehq/utils-go/codec"
 	"github.com/cruciblehq/utils-go/file"
-	"github.com/cruciblehq/utils-go/pki"
 )
 
 type testCA struct {
@@ -26,7 +25,7 @@ type testCA struct {
 
 func sign(t *testing.T, tmpl, parent *x509.Certificate, pub ed25519.PublicKey, key ed25519.PrivateKey) *x509.Certificate {
 	t.Helper()
-	cert, err := pki.Sign(tmpl, parent, pub, key)
+	cert, err := trust.Sign(tmpl, parent, pub, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,15 +35,15 @@ func sign(t *testing.T, tmpl, parent *x509.Certificate, pub ed25519.PublicKey, k
 func newTestCA(t *testing.T) testCA {
 	t.Helper()
 	rootPub, rootKey, _ := ed25519.GenerateKey(rand.Reader)
-	root := sign(t, pki.AuthorityTemplate("root", pki.ValidFor(trust.RootLifetime), false), nil, rootPub, rootKey)
+	root := sign(t, trust.AuthorityTemplate("root", trust.ValidFor(trust.RootLifetime), false), nil, rootPub, rootKey)
 	issuerPub, issuerKey, _ := ed25519.GenerateKey(rand.Reader)
-	issuer := sign(t, pki.AuthorityTemplate("issuer", pki.ValidFor(trust.IssuerLifetime), true), root, issuerPub, rootKey)
+	issuer := sign(t, trust.AuthorityTemplate("issuer", trust.ValidFor(trust.IssuerLifetime), true), root, issuerPub, rootKey)
 	return testCA{root: root, rootKey: rootKey, issuer: issuer, issuerKey: issuerKey}
 }
 
 func (ca testCA) revocations(t *testing.T, number int64) []byte {
 	t.Helper()
-	crl, err := pki.SignRevocationList(number, pki.ValidFor(trust.IssuerLifetime), nil, ca.root, ca.rootKey)
+	crl, err := trust.SignRevocationList(number, trust.ValidFor(trust.IssuerLifetime), nil, ca.root, ca.rootKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,13 +53,13 @@ func (ca testCA) revocations(t *testing.T, number int64) []byte {
 func (ca testCA) clientCert(t *testing.T) tls.Certificate {
 	t.Helper()
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
-	leaf := sign(t, pki.LeafTemplate("client", pki.ValidFor(trust.ClientLifetime), x509.ExtKeyUsageClientAuth), ca.issuer, pub, ca.issuerKey)
+	leaf := sign(t, trust.LeafTemplate("client", trust.ValidFor(trust.ClientLifetime), x509.ExtKeyUsageClientAuth), ca.issuer, pub, ca.issuerKey)
 	return tls.Certificate{Certificate: [][]byte{leaf.Raw, ca.issuer.Raw}, PrivateKey: key}
 }
 
 func (ca testCA) signMachine(t *testing.T, csr *x509.CertificateRequest, id trust.MachineID) []byte {
 	t.Helper()
-	tmpl := pki.LeafTemplate(id.Name(), pki.ValidFor(trust.RootLifetime), x509.ExtKeyUsageServerAuth, id.Name())
+	tmpl := trust.LeafTemplate(id.Name(), trust.ValidFor(trust.RootLifetime), x509.ExtKeyUsageServerAuth, id.Name())
 	return sign(t, tmpl, ca.root, csr.PublicKey.(ed25519.PublicKey), ca.rootKey).Raw
 }
 
