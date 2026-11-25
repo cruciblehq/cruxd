@@ -39,10 +39,10 @@ github.com/containerd/ttrpc v1.2.7 h1:qIrroQvuOL9HQ1X6KHe2ohc7p+HP/0VE6XPU7elJRq
 github.com/containerd/ttrpc v1.2.7/go.mod h1:YCXHsb32f+Sq5/72xHubdiJRQY9inL4a4ZQrAbN1q9o=
 github.com/containerd/typeurl/v2 v2.2.3 h1:yNA/94zxWdvYACdYO8zofhrTVuQY73fFU1y++dYSw40=
 github.com/containerd/typeurl/v2 v2.2.3/go.mod h1:95ljDnPfD3bAbDJRugOiShd/DlAAsxGtUBhJxIn7SCk=
-github.com/cruciblehq/spec v0.0.0-20261124184255-190b774eb9b7 h1:Atk5/csf/egg9nrX+AZJ/tNubznMxRFNxJGUubeo+Ko=
-github.com/cruciblehq/spec v0.0.0-20261124184255-190b774eb9b7/go.mod h1:5h03NUDQcg81SEuA/Om4zjFK8WCIKeqq6D2yNW8Ou28=
-github.com/cruciblehq/utils-go v0.0.0-20261120132316-d8af996aee7d h1:R7hzDeKJGpAOkL6jFSlS97XeAhBaL2OIUeWUYp3irIA=
-github.com/cruciblehq/utils-go v0.0.0-20261120132316-d8af996aee7d/go.mod h1:aRYEXgnI/sv6wZraDMjNHZrF2I8n1zSi8cUsF1TFrZI=
+github.com/cruciblehq/spec v0.0.0-20261125183510-f2b43a35e756 h1:xUxftkABk8Zyoe+E3d5oRgtJ0/0KfMHkX8xE/75oBco=
+github.com/cruciblehq/spec v0.0.0-20261125183510-f2b43a35e756/go.mod h1:5h03NUDQcg81SEuA/Om4zjFK8WCIKeqq6D2yNW8Ou28=
+github.com/cruciblehq/utils-go v0.0.0-20261125183600-ea62fb1fb4a9 h1:cbxx0qPA4sopI2MvC5yx7ILNQPKiIgBLke7DKBnUwXA=
+github.com/cruciblehq/utils-go v0.0.0-20261125183600-ea62fb1fb4a9/go.mod h1:o1/d5/TOuxjMuimpjfBefvWvKwNRq5PbVS6tqRjYzoo=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
